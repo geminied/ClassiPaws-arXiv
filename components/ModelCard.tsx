@@ -1,0 +1,2 @@
+import Link from "next/link"; import type {Model} from "@/lib/data";
+export function ModelCard({model,rank}:{model:Model,rank:number}){return <article className="card model"><b className="rank">#{rank}</b><h3>{model.name}</h3><small className="purple">{model.type}</small><div className="score">{model.macroF1.toFixed(3)}</div><small>Macro F1</small><div className="progress"><i style={{width:`${model.macroF1*100}%`}}/></div><p>{model.description}</p><Link className="btn ghost small" href={`/models/${encodeURIComponent(model.name)}`}>View Details</Link></article>}

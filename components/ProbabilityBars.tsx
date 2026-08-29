@@ -1,0 +1,1 @@
+export function ProbabilityBars({probabilities}:{probabilities:Record<string,number>}){return <div>{Object.entries(probabilities).sort((a,b)=>b[1]-a[1]).map(([name,value])=><div className="prob" key={name}><div><span>{name}</span><b>{(value*100).toFixed(2)}%</b></div><i><em style={{width:`${Math.max(value*100,.4)}%`}}/></i></div>)}</div>}

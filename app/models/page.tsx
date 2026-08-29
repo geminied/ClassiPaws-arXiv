@@ -1,0 +1,2 @@
+import {models} from "@/lib/data"; import {ModelCard} from "@/components/ModelCard";
+export default function Models(){const ranked=[...models].sort((a,b)=>b.macroF1-a.macroF1);return <main className="page"><div className="section-head"><div><h1>All Models</h1><p>Explore the classifiers used in the research project.</p></div><span className="pill">{models.length} models</span></div><div className="models">{ranked.map((m,i)=><ModelCard key={m.name} model={m} rank={i+1}/>)}</div></main>}

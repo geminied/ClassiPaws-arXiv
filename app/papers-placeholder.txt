@@ -1,0 +1,1 @@
+Paper detail route is intentionally documented in README for the next iteration.
