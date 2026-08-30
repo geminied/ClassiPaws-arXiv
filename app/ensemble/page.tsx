@@ -1,3 +1,175 @@
-import Link from "next/link"; import {ArrowRight,Sparkles} from "lucide-react"; import {models} from "@/lib/data";
-export default function Ensemble(){const e=models[0];return <main className="page"><div className="section-head"><div><span className="pill"><Sparkles size={13}/>Soft voting ensemble</span><h1 style={{marginTop:10}}>Our Ensemble Model</h1><p>See how multiple classifiers contribute to one final prediction.</p></div></div><section className="card ensemble"><Node n="BERT Base" w="50%"/><b>+</b><Node n="Logistic Regression" w="30%"/><b>+</b><Node n="BiGRU" w="20%"/><b>=</b><Node n="Ensemble Prediction" w="🏆"/></section><div className="stats"><Stat l="Accuracy" v={e.accuracy.toFixed(3)}/><Stat l="Macro F1" v={e.macroF1.toFixed(3)}/><Stat l="Weighted F1" v={e.weightedF1.toFixed(3)}/><Stat l="Components" v="3"/></div><div className="section-head"><h2>Ready to test it?</h2><Link className="btn primary small" href="/predict">Try a prediction <ArrowRight size={13}/></Link></div></main>}
-function Node({n,w}:{n:string,w:string}){return <div className="node"><b>{n}</b><strong>{w}</strong></div>} function Stat({l,v}:{l:string,v:string}){return <div className="card stat"><small>{l}</small><strong>{v}</strong></div>}
+export default function EnsemblePage() {
+  const models = [
+    {
+      emoji: "🤖",
+      name: "BERT",
+      color: "var(--purple-light)",
+    },
+    {
+      emoji: "🧠",
+      name: "BiGRU",
+      color: "var(--pink-light)",
+    },
+    {
+      emoji: "🌸",
+      name: "Logistic Regression",
+      color: "var(--blue-light)",
+    },
+  ];
+
+  return (
+    <main className="page">
+
+      <div className="section-head">
+
+        <div>
+
+          <div
+            style={{
+              color: "var(--pink)",
+              fontWeight: 900,
+              fontSize: 12,
+              marginBottom: 7,
+            }}
+          >
+            🧠 THE TEAM
+          </div>
+
+          <h1>
+            Meet the ensemble! 🐾
+          </h1>
+
+          <p>
+            See how multiple models can work
+            together to produce a final prediction.
+          </p>
+
+        </div>
+
+      </div>
+
+      <section
+        className="card"
+        style={{
+          padding: 30,
+          textAlign: "center",
+        }}
+      >
+
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
+          }}
+        >
+
+          {models.map((model, index) => (
+            <div
+              key={model.name}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+
+              <div
+                style={{
+                  width: 150,
+                  padding: 20,
+                  borderRadius: 20,
+                  background:
+                    model.color,
+                }}
+              >
+
+                <div
+                  style={{
+                    fontSize: 34,
+                  }}
+                >
+                  {model.emoji}
+                </div>
+
+                <strong
+                  style={{
+                    display: "block",
+                    marginTop: 8,
+                    color:
+                      "var(--purple)",
+                  }}
+                >
+                  {model.name}
+                </strong>
+
+              </div>
+
+              {index <
+                models.length - 1 && (
+                <div
+                  style={{
+                    color:
+                      "var(--pink)",
+                    fontSize: 25,
+                  }}
+                >
+                  →
+                </div>
+              )}
+
+            </div>
+          ))}
+
+        </div>
+
+        <div
+          style={{
+            margin:
+              "28px auto 0",
+            width: 220,
+            padding: 22,
+            borderRadius: 22,
+            background:
+              "linear-gradient(135deg,#eee6ff,#ffe8f2)",
+          }}
+        >
+
+          <div
+            style={{
+              fontSize: 38,
+            }}
+          >
+            🐾
+          </div>
+
+          <strong
+            style={{
+              display: "block",
+              color:
+                "var(--purple)",
+              fontSize: 17,
+              marginTop: 7,
+            }}
+          >
+            Final Prediction
+          </strong>
+
+          <small
+            style={{
+              color:
+                "var(--muted)",
+            }}
+          >
+            Everyone votes, ClassiPaws decides ✨
+          </small>
+
+        </div>
+
+      </section>
+
+    </main>
+  );
+}
