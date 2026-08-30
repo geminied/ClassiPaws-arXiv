@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ||
-  "http://127.0.0.1:8000";
+  "${API_URL}";
 
 export async function GET(
   request: Request
@@ -47,7 +47,7 @@ export async function GET(
 
     const response =
       await fetch(
-        `http://127.0.0.1:8000/papers?${params.toString()}`,
+        `${API_URL}/papers?${params.toString()}`,
         {
           cache: "no-store",
         }
