@@ -1,0 +1,1880 @@
+import torch
+
+print("PyTorch version:", torch.__version__)
+print("CUDA available:", torch.cuda.is_available())
+
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+else:
+    print("WARNING: GPU is not available.")
+
+!pip install -q datasets transformers accelerate sentencepiece gensim scikit-learn pandas numpy matplotlib seaborn nltk wordcloud
+
+!pip install -q gensim tensorflow
+
+!wget -q --show-progress \
+    https://nlp.stanford.edu/data/glove.twitter.27B.zip
+!unzip -q glove.twitter.27B.zip
+
+!pip install -q transformers accelerate evaluate
+
+import os
+import re
+import random
+import warnings
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from collections import Counter
+
+warnings.filterwarnings("ignore")
+
+SEED = 42
+
+random.seed(SEED)
+np.random.seed(SEED)
+
+print("Environment setup completed.")
+print("Random seed:", SEED)
+
+import tensorflow as tf
+import gensim
+
+print("TensorFlow:", tf.__version__)
+print("Gensim:", gensim.__version__)
+print("GPU available:", tf.config.list_physical_devices("GPU"))
+
+import os
+
+print(
+    os.path.exists(
+        "glove.twitter.27B.100d.txt"
+    )
+)
+
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    TrainingArguments,
+    Trainer,
+    DataCollatorWithPadding,
+    EarlyStoppingCallback
+)
+
+print(
+    "Transformers libraries loaded successfully."
+)
+
+!pip install -q datasets pandas pyarrow
+
+from datasets import load_dataset
+import pandas as pd
+
+print("Streaming 50,000 rows instantly from Hugging Face...")
+
+dataset = load_dataset("librarian-bots/arxiv-metadata-snapshot", split="train", streaming=True)
+
+dataset = dataset.shuffle(
+    seed=SEED,
+    buffer_size=100000
+)
+
+
+subset = list(dataset.take(50000))
+df = pd.DataFrame(subset)
+print(f"Extraction complete! Initial Dataframe Shape: {df.shape}")
+
+
+df['target_classname'] = df['categories'].apply(lambda x: x.split()[0] if len(x.split()) > 0 else 'unknown')
+
+df['target_classname'] = df['target_classname'].apply(lambda x: x.split('.')[0])
+
+
+physics_archives = ['astro-ph', 'cond-mat', 'gr-qc', 'hep-ex', 'hep-lat',
+                    'hep-ph', 'hep-th', 'math-ph', 'nlin', 'nucl-ex', 'nucl-th', 'quant-ph']
+df['target_classname'] = df['target_classname'].apply(lambda x: 'physics' if x in physics_archives else x)
+
+
+valid_classes = ['cs', 'math', 'physics', 'stat', 'q-bio', 'q-fin', 'eess', 'econ']
+df = df[df['target_classname'].isin(valid_classes)]
+
+
+df.to_csv('arxiv_sampled_50k.csv', index=False)
+print("\nSaved file to disk as 'arxiv_sampled_50k.csv'. Data is locked in!")
+
+
+print("\nYour final multi-class distribution counts:")
+print(df['target_classname'].value_counts())
+
+df["title"] = df["title"].fillna("")
+df["abstract"] = df["abstract"].fillna("")
+
+df["text"] = (
+    df["title"].astype(str)
+    + " "
+    + df["abstract"].astype(str)
+)
+
+df["text"] = df["text"].str.strip()
+
+df = df[
+    df["text"].str.len() > 20
+].copy()
+
+before_duplicates = len(df)
+
+df = df.drop_duplicates(
+    subset=["text"]
+).reset_index(drop=True)
+
+after_duplicates = len(df)
+
+print(
+    "Duplicates removed:",
+    before_duplicates - after_duplicates
+)
+
+print("=" * 60)
+print("FINAL DATASET SUMMARY")
+print("=" * 60)
+
+print("\nShape:")
+print(df.shape)
+
+print("\nClass distribution:")
+print(
+    df["target_classname"].value_counts()
+)
+
+print("\nMissing values:")
+print(
+    df[
+        ["title", "abstract", "text", "target_classname"]
+    ].isnull().sum()
+)
+
+print("\nDuplicate texts:")
+print(
+    df["text"].duplicated().sum()
+)
+
+class_counts = (
+    df["target_classname"]
+    .value_counts()
+    .sort_values(ascending=False)
+)
+
+print("\nClass percentages:")
+print(
+    (class_counts / len(df) * 100).round(2)
+)
+
+print("=" * 70)
+print("DATASET OVERVIEW")
+print("=" * 70)
+
+print(f"\nDataset Shape: {df.shape}")
+
+print("\nColumn Names:")
+print(df.columns.tolist())
+
+print("\nData Types:")
+display(df.dtypes)
+
+print("\nFirst 5 Rows:")
+display(df.head())
+
+missing_values = pd.DataFrame({
+    "Missing Values": df.isnull().sum(),
+    "Percentage": (
+        df.isnull().sum() / len(df) * 100
+    )
+})
+
+missing_values = missing_values.sort_values(
+    by="Missing Values",
+    ascending=False
+)
+
+display(missing_values)
+
+print("\nTotal Missing Values:", df.isnull().sum().sum())
+missing_plot = missing_values[
+    missing_values["Missing Values"] > 0
+]
+
+if len(missing_plot) > 0:
+
+    plt.figure(figsize=(10, 5))
+
+    plt.bar(
+        missing_plot.index,
+        missing_plot["Missing Values"]
+    )
+
+    plt.title("Missing Values by Column")
+    plt.xlabel("Columns")
+    plt.ylabel("Number of Missing Values")
+
+    plt.xticks(rotation=45)
+
+    plt.tight_layout()
+    plt.show()
+
+else:
+    print("No missing values found in the dataset.")
+
+if "abstract" in df.columns:
+
+    abstract_duplicates = df.duplicated(
+        subset=["abstract"]
+    ).sum()
+
+    print(
+        "Duplicate Abstracts:",
+        abstract_duplicates
+    )
+
+if "title" in df.columns:
+
+    title_duplicates = df.duplicated(
+        subset=["title"]
+    ).sum()
+
+    print(
+        "Duplicate Titles:",
+        title_duplicates
+    )
+
+class_distribution = pd.DataFrame({
+    "Count": df["target_classname"].value_counts(),
+    "Percentage": (
+        df["target_classname"]
+        .value_counts(normalize=True)
+        * 100
+    )
+})
+
+class_distribution = class_distribution.sort_values(
+    by="Count",
+    ascending=False
+)
+
+class_distribution["Percentage"] = (
+    class_distribution["Percentage"].round(2)
+)
+
+display(class_distribution)
+
+class_counts = df[
+    "target_classname"
+].value_counts()
+
+largest_class = class_counts.max()
+smallest_class = class_counts.min()
+
+imbalance_ratio = (
+    largest_class / smallest_class
+)
+
+print("=" * 70)
+print("CLASS IMBALANCE ANALYSIS")
+print("=" * 70)
+
+print(f"Largest Class Size: {largest_class}")
+print(f"Smallest Class Size: {smallest_class}")
+
+print(
+    f"Imbalance Ratio: "
+    f"{imbalance_ratio:.2f}:1"
+)
+class_counts = (
+    df["target_classname"]
+    .value_counts()
+    .sort_values(ascending=False)
+)
+
+plt.figure(figsize=(10, 6))
+
+plt.bar(
+    class_counts.index,
+    class_counts.values
+)
+
+plt.title("Distribution of Research Papers by Discipline")
+plt.xlabel("Target Class")
+plt.ylabel("Number of Papers")
+
+plt.xticks(rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+df["title_length"] = (
+    df["title"]
+    .fillna("")
+    .astype(str)
+    .str.len()
+)
+
+df["abstract_length"] = (
+    df["abstract"]
+    .fillna("")
+    .astype(str)
+    .str.len()
+)
+
+print("=" * 70)
+print("TEXT LENGTH STATISTICS")
+print("=" * 70)
+
+print("\nTITLE LENGTH:")
+display(
+    df["title_length"].describe()
+)
+
+print("\nABSTRACT LENGTH:")
+display(
+    df["abstract_length"].describe()
+)
+
+df["title_word_count"] = (
+    df["title"]
+    .fillna("")
+    .astype(str)
+    .apply(lambda x: len(x.split()))
+)
+
+df["abstract_word_count"] = (
+    df["abstract"]
+    .fillna("")
+    .astype(str)
+    .apply(lambda x: len(x.split()))
+)
+
+print("=" * 70)
+print("WORD COUNT STATISTICS")
+print("=" * 70)
+
+print("\nTITLE WORD COUNT:")
+display(
+    df["title_word_count"].describe()
+)
+
+print("\nABSTRACT WORD COUNT:")
+display(
+    df["abstract_word_count"].describe()
+)
+
+plt.figure(figsize=(10, 6))
+
+plt.hist(
+    df["abstract_word_count"],
+    bins=50
+)
+
+plt.title("Distribution of Abstract Word Counts")
+plt.xlabel("Number of Words")
+plt.ylabel("Number of Papers")
+
+plt.tight_layout()
+plt.show()
+average_length_by_class = (
+    df.groupby("target_classname")[
+        "abstract_word_count"
+    ]
+    .mean()
+    .sort_values(ascending=False)
+)
+
+plt.figure(figsize=(10, 6))
+
+plt.bar(
+    average_length_by_class.index,
+    average_length_by_class.values
+)
+
+plt.title("Average Abstract Length by Research Discipline")
+plt.xlabel("Target Class")
+plt.ylabel("Average Number of Words")
+
+plt.xticks(rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+display(
+    average_length_by_class.to_frame(
+        "Average Word Count"
+    )
+)
+median_length_by_class = (
+    df.groupby("target_classname")[
+        "abstract_word_count"
+    ]
+    .median()
+    .sort_values(ascending=False)
+)
+
+display(
+    median_length_by_class.to_frame(
+        "Median Word Count"
+    )
+)
+text_stats_by_class = (
+    df.groupby("target_classname")
+    .agg(
+        Number_of_Papers=(
+            "target_classname",
+            "count"
+        ),
+        Avg_Title_Words=(
+            "title_word_count",
+            "mean"
+        ),
+        Avg_Abstract_Words=(
+            "abstract_word_count",
+            "mean"
+        ),
+        Median_Abstract_Words=(
+            "abstract_word_count",
+            "median"
+        ),
+        Min_Abstract_Words=(
+            "abstract_word_count",
+            "min"
+        ),
+        Max_Abstract_Words=(
+            "abstract_word_count",
+            "max"
+        )
+    )
+    .round(2)
+    .sort_values(
+        "Number_of_Papers",
+        ascending=False
+    )
+)
+
+display(text_stats_by_class)
+
+df["num_categories"] = (
+    df["categories"]
+    .fillna("")
+    .astype(str)
+    .apply(lambda x: len(x.split()))
+)
+
+display(
+    df["num_categories"].describe()
+)
+
+print(
+    "\nAverage Categories Per Paper:",
+    round(df["num_categories"].mean(), 2)
+)
+
+plt.figure(figsize=(8, 5))
+
+plt.hist(
+    df["num_categories"],
+    bins=range(
+        1,
+        int(df["num_categories"].max()) + 2
+    ),
+    align="left"
+)
+
+plt.title("Number of arXiv Categories per Research Paper")
+plt.xlabel("Number of Categories")
+plt.ylabel("Number of Papers")
+
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(8, 5))
+
+plt.hist(
+    df["num_categories"],
+    bins=range(
+        1,
+        int(df["num_categories"].max()) + 2
+    ),
+    align="left"
+)
+
+plt.title("Number of arXiv Categories per Research Paper")
+plt.xlabel("Number of Categories")
+plt.ylabel("Number of Papers")
+
+plt.tight_layout()
+plt.show()
+
+multi_category_count = (
+    df["num_categories"] > 1
+).sum()
+
+single_category_count = (
+    df["num_categories"] == 1
+).sum()
+
+print("=" * 70)
+print("MULTI-CATEGORY ANALYSIS")
+print("=" * 70)
+
+print(
+    f"Single Category Papers: "
+    f"{single_category_count}"
+)
+
+print(
+    f"Multi-Category Papers: "
+    f"{multi_category_count}"
+)
+
+print(
+    f"Percentage Multi-Category: "
+    f"{(multi_category_count / len(df)) * 100:.2f}%"
+)
+
+from collections import Counter
+
+all_categories = []
+
+for category_string in df["categories"].fillna(""):
+
+    all_categories.extend(
+        category_string.split()
+    )
+
+category_counts = Counter(all_categories)
+
+top_categories = pd.DataFrame(
+    category_counts.most_common(20),
+    columns=[
+        "Category",
+        "Count"
+    ]
+)
+
+display(top_categories)
+
+plt.figure(figsize=(12, 6))
+
+plt.bar(
+    top_categories["Category"],
+    top_categories["Count"]
+)
+
+plt.title("Top 20 Most Common Original arXiv Categories")
+plt.xlabel("arXiv Category")
+plt.ylabel("Number of Papers")
+
+plt.xticks(rotation=60)
+
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(8, 6))
+
+plt.scatter(
+    df["title_word_count"],
+    df["abstract_word_count"],
+    alpha=0.3
+)
+
+plt.title("Relationship Between Title and Abstract Length")
+plt.xlabel("Title Word Count")
+plt.ylabel("Abstract Word Count")
+
+plt.tight_layout()
+plt.show()
+
+correlation = df[
+    ["title_word_count", "abstract_word_count"]
+].corr()
+
+print("\nCorrelation Matrix:")
+display(correlation)
+
+for target_class in sorted(
+    df["target_classname"].unique()
+):
+
+    print("\n" + "=" * 80)
+    print(f"CLASS: {target_class}")
+    print("=" * 80)
+
+    sample = (
+        df[
+            df["target_classname"] == target_class
+        ]
+        .sample(
+            1,
+            random_state=42
+        )
+    )
+
+    print(
+        "TITLE:",
+        sample["title"].iloc[0]
+    )
+
+    print(
+        "\nABSTRACT:",
+        sample["abstract"].iloc[0][:500],
+        "..."
+    )
+
+plt.figure(figsize=(10, 6))
+
+sns.barplot(
+    x=class_counts.index,
+    y=class_counts.values
+)
+
+plt.title("ArXiv Research Discipline Distribution")
+plt.xlabel("Research Discipline")
+plt.ylabel("Number of Papers")
+plt.xticks(rotation=45)
+
+plt.tight_layout()
+plt.show()
+
+df["word_count"] = df["text"].apply(
+    lambda x: len(x.split())
+)
+
+print(df["word_count"].describe())
+
+plt.figure(figsize=(10, 6))
+
+sns.histplot(
+    df["word_count"],
+    bins=50,
+    kde=True
+)
+
+plt.title("Distribution of Document Lengths")
+plt.xlabel("Number of Words")
+plt.ylabel("Frequency")
+
+plt.tight_layout()
+plt.show()
+
+from sklearn.preprocessing import LabelEncoder
+
+label_encoder = LabelEncoder()
+
+df["label"] = label_encoder.fit_transform(
+    df["target_classname"]
+)
+
+class_names = label_encoder.classes_
+
+print("Class mapping:")
+for index, class_name in enumerate(class_names):
+    print(f"{index} -> {class_name}")
+
+print("\nNumber of classes:", len(class_names))
+
+X = df["text"].values
+y = df["label"].values
+
+print("X shape:", X.shape)
+print("y shape:", y.shape)
+
+print("\nFirst document:")
+print(X[0][:500])
+
+print("\nFirst label:")
+print(y[0])
+
+from sklearn.model_selection import train_test_split
+
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X,
+    y,
+    test_size=0.30,
+    stratify=y,
+    random_state=SEED
+)
+
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp,
+    y_temp,
+    test_size=0.50,
+    stratify=y_temp,
+    random_state=SEED
+)
+
+print("Training samples:", len(X_train))
+print("Validation samples:", len(X_val))
+print("Test samples:", len(X_test))
+
+print("=" * 60)
+print("TRAIN DISTRIBUTION")
+print("=" * 60)
+
+print(
+    pd.Series(y_train)
+    .map(dict(enumerate(class_names)))
+    .value_counts(normalize=True)
+    .sort_index()
+    .mul(100)
+    .round(2)
+)
+
+print("\n" + "=" * 60)
+print("VALIDATION DISTRIBUTION")
+print("=" * 60)
+
+print(
+    pd.Series(y_val)
+    .map(dict(enumerate(class_names)))
+    .value_counts(normalize=True)
+    .sort_index()
+    .mul(100)
+    .round(2)
+)
+
+print("\n" + "=" * 60)
+print("TEST DISTRIBUTION")
+print("=" * 60)
+
+print(
+    pd.Series(y_test)
+    .map(dict(enumerate(class_names)))
+    .value_counts(normalize=True)
+    .sort_index()
+    .mul(100)
+    .round(2)
+)
+
+from sklearn.utils.class_weight import compute_class_weight
+
+classes = np.unique(y_train)
+
+class_weights_array = compute_class_weight(
+    class_weight="balanced",
+    classes=classes,
+    y=y_train
+)
+
+class_weights = {
+    int(class_id): float(weight)
+    for class_id, weight in zip(
+        classes,
+        class_weights_array
+    )
+}
+
+print("Class weights:")
+
+for class_id, weight in class_weights.items():
+    print(
+        f"{class_names[class_id]:8s} -> {weight:.4f}"
+    )
+
+df.to_csv(
+    "arxiv_clean_50k.csv",
+    index=False
+)
+
+print(
+    "Saved: arxiv_clean_50k.csv"
+)
+
+dataset_summary = pd.DataFrame({
+    "Split": [
+        "Full Dataset",
+        "Training",
+        "Validation",
+        "Test"
+    ],
+    "Samples": [
+        len(df),
+        len(X_train),
+        len(X_val),
+        len(X_test)
+    ]
+})
+
+dataset_summary
+
+import re
+
+def clean_text(text):
+
+    text = str(text)
+    text = text.lower()
+
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"https?://\S+|www\.\S+", " ", text)
+    text = re.sub(r"\$+", " ", text)
+    text = re.sub(r"[{}[\]<>]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
+
+X_train_clean = np.array([
+    clean_text(x) for x in X_train
+])
+
+X_val_clean = np.array([
+    clean_text(x) for x in X_val
+])
+
+X_test_clean = np.array([
+    clean_text(x) for x in X_test
+])
+
+print("Preprocessing completed.")
+
+print("\nExample:")
+print(X_train_clean[0][:1000])
+
+print("Original length:")
+print(len(X_train[0]))
+
+print("\nCleaned length:")
+print(len(X_train_clean[0]))
+
+print("\nOriginal word count:")
+print(len(X_train[0].split()))
+
+print("\nCleaned word count:")
+print(len(X_train_clean[0].split()))
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+tfidf = TfidfVectorizer(
+    max_features=50000,
+    ngram_range=(1, 2),
+    min_df=3,
+    max_df=0.95,
+    sublinear_tf=True
+)
+
+X_train_tfidf = tfidf.fit_transform(
+    X_train_clean
+)
+
+X_val_tfidf = tfidf.transform(
+    X_val_clean
+)
+
+X_test_tfidf = tfidf.transform(
+    X_test_clean
+)
+
+print("TF-IDF completed.")
+
+print("Training shape:", X_train_tfidf.shape)
+print("Validation shape:", X_val_tfidf.shape)
+print("Test shape:", X_test_tfidf.shape)
+
+print(
+    "\nVocabulary size:",
+    len(tfidf.vocabulary_)
+)
+
+feature_names = np.array(
+    tfidf.get_feature_names_out()
+)
+
+mean_tfidf = np.asarray(
+    X_train_tfidf.mean(axis=0)
+).ravel()
+
+top_indices = mean_tfidf.argsort()[-30:][::-1]
+
+top_terms = pd.DataFrame({
+    "term": feature_names[top_indices],
+    "mean_tfidf": mean_tfidf[top_indices]
+})
+
+top_terms
+
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+    confusion_matrix
+)
+
+results = []
+
+def evaluate_model(
+    model_name,
+    representation,
+    y_true,
+    y_pred,
+    split="validation",
+    configuration=None
+):
+
+    accuracy = accuracy_score(
+        y_true,
+        y_pred
+    )
+
+    precision = precision_score(
+        y_true,
+        y_pred,
+        average="macro",
+        zero_division=0
+    )
+
+    recall = recall_score(
+        y_true,
+        y_pred,
+        average="macro",
+        zero_division=0
+    )
+
+    macro_f1 = f1_score(
+        y_true,
+        y_pred,
+        average="macro",
+        zero_division=0
+    )
+
+    weighted_f1 = f1_score(
+        y_true,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    result = {
+        "model": model_name,
+        "representation": representation,
+        "configuration": configuration,
+        "split": split,
+        "accuracy": accuracy,
+        "macro_precision": precision,
+        "macro_recall": recall,
+        "macro_f1": macro_f1,
+        "weighted_f1": weighted_f1
+    }
+
+    results.append(result)
+
+    print(f"\n{'='*60}")
+    print(f"{model_name} | {representation}")
+    print(f"{'='*60}")
+    print(f"Accuracy       : {accuracy:.4f}")
+    print(f"Macro Precision: {precision:.4f}")
+    print(f"Macro Recall   : {recall:.4f}")
+    print(f"Macro F1       : {macro_f1:.4f}")
+    print(f"Weighted F1    : {weighted_f1:.4f}")
+
+    print("\nClassification Report:")
+
+    print(
+        classification_report(
+            y_true,
+            y_pred,
+            target_names=class_names,
+            zero_division=0
+        )
+    )
+
+    return result
+
+def plot_confusion_matrix(
+    y_true,
+    y_pred,
+    title
+):
+
+    cm = confusion_matrix(
+        y_true,
+        y_pred
+    )
+
+    plt.figure(
+        figsize=(10, 8)
+    )
+
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=class_names,
+        yticklabels=class_names
+    )
+
+    plt.title(title)
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+
+    plt.tight_layout()
+    plt.show()
+
+tuning_results = []
+def record_tuning_result(
+    model,
+    representation,
+    configuration,
+    hyperparameters,
+    validation_accuracy,
+    validation_macro_f1
+):
+
+    tuning_results.append({
+        "model": model,
+        "representation": representation,
+        "configuration": configuration,
+        "hyperparameters": str(hyperparameters),
+        "validation_accuracy": validation_accuracy,
+        "validation_macro_f1": validation_macro_f1
+    })
+
+tuning_df = pd.DataFrame(
+    tuning_results
+)
+
+from sklearn.linear_model import LogisticRegression
+
+lr_config_1 = {
+    "C": 1.0,
+    "solver": "saga",
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+lr_1 = LogisticRegression(
+    **lr_config_1
+)
+
+print("Training Logistic Regression - Configuration 1...")
+
+lr_1.fit(
+    X_train_tfidf,
+    y_train
+)
+
+lr_val_pred_1 = lr_1.predict(
+    X_val_tfidf
+)
+
+lr_result_1 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=lr_val_pred_1,
+    split="validation",
+    configuration="LR-1"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="TF-IDF",
+    configuration="LR-1",
+    hyperparameters=lr_config_1,
+    validation_accuracy=lr_result_1["accuracy"],
+    validation_macro_f1=lr_result_1["macro_f1"]
+)
+
+lr_config_2 = {
+    "C": 2.0,
+    "solver": "saga",
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+lr_2 = LogisticRegression(
+    **lr_config_2
+)
+
+print("Training Logistic Regression - Configuration 2...")
+
+lr_2.fit(
+    X_train_tfidf,
+    y_train
+)
+
+lr_val_pred_2 = lr_2.predict(
+    X_val_tfidf
+)
+
+lr_result_2 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=lr_val_pred_2,
+    split="validation",
+    configuration="LR-2"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="TF-IDF",
+    configuration="LR-2",
+    hyperparameters=lr_config_2,
+    validation_accuracy=lr_result_2["accuracy"],
+    validation_macro_f1=lr_result_2["macro_f1"]
+)
+
+lr_config_3 = {
+    "C": 4.0,
+    "solver": "saga",
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+lr_3 = LogisticRegression(
+    **lr_config_3
+)
+
+print("Training Logistic Regression - Configuration 3...")
+
+lr_3.fit(
+    X_train_tfidf,
+    y_train
+)
+
+lr_val_pred_3 = lr_3.predict(
+    X_val_tfidf
+)
+
+lr_result_3 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=lr_val_pred_3,
+    split="validation",
+    configuration="LR-3"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="TF-IDF",
+    configuration="LR-3",
+    hyperparameters=lr_config_3,
+    validation_accuracy=lr_result_3["accuracy"],
+    validation_macro_f1=lr_result_3["macro_f1"]
+)
+
+pd.DataFrame(
+    tuning_results
+).sort_values(
+    "validation_macro_f1",
+    ascending=False
+)
+
+from sklearn.naive_bayes import MultinomialNB
+
+nb_config_1 = {
+    "alpha": 0.1
+}
+
+nb_1 = MultinomialNB(
+    **nb_config_1
+)
+
+print("Training Naive Bayes - Configuration 1...")
+
+nb_1.fit(
+    X_train_tfidf,
+    y_train
+)
+
+nb_val_pred_1 = nb_1.predict(
+    X_val_tfidf
+)
+
+nb_result_1 = evaluate_model(
+    model_name="Naive Bayes",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=nb_val_pred_1,
+    split="validation",
+    configuration="NB-1"
+)
+
+record_tuning_result(
+    model="Naive Bayes",
+    representation="TF-IDF",
+    configuration="NB-1",
+    hyperparameters=nb_config_1,
+    validation_accuracy=nb_result_1["accuracy"],
+    validation_macro_f1=nb_result_1["macro_f1"]
+)
+
+nb_config_2 = {
+    "alpha": 0.5
+}
+
+nb_2 = MultinomialNB(
+    **nb_config_2
+)
+
+print("Training Naive Bayes - Configuration 2...")
+
+nb_2.fit(
+    X_train_tfidf,
+    y_train
+)
+
+nb_val_pred_2 = nb_2.predict(
+    X_val_tfidf
+)
+
+nb_result_2 = evaluate_model(
+    model_name="Naive Bayes",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=nb_val_pred_2,
+    split="validation",
+    configuration="NB-2"
+)
+
+record_tuning_result(
+    model="Naive Bayes",
+    representation="TF-IDF",
+    configuration="NB-2",
+    hyperparameters=nb_config_2,
+    validation_accuracy=nb_result_2["accuracy"],
+    validation_macro_f1=nb_result_2["macro_f1"]
+)
+
+nb_config_3 = {
+    "alpha": 1.0
+}
+
+nb_3 = MultinomialNB(
+    **nb_config_3
+)
+
+print("Training Naive Bayes - Configuration 3...")
+
+nb_3.fit(
+    X_train_tfidf,
+    y_train
+)
+
+nb_val_pred_3 = nb_3.predict(
+    X_val_tfidf
+)
+
+nb_result_3 = evaluate_model(
+    model_name="Naive Bayes",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=nb_val_pred_3,
+    split="validation",
+    configuration="NB-3"
+)
+
+record_tuning_result(
+    model="Naive Bayes",
+    representation="TF-IDF",
+    configuration="NB-3",
+    hyperparameters=nb_config_3,
+    validation_accuracy=nb_result_3["accuracy"],
+    validation_macro_f1=nb_result_3["macro_f1"]
+)
+
+tuning_df = pd.DataFrame(
+    tuning_results
+)
+
+print(
+    tuning_df[
+        tuning_df["model"] == "Naive Bayes"
+    ].sort_values(
+        "validation_macro_f1",
+        ascending=False
+    ).to_string(index=False)
+)
+
+from sklearn.ensemble import RandomForestClassifier
+
+rf_config_1 = {
+    "n_estimators": 100,
+    "max_depth": 20,
+    "min_samples_split": 5,
+    "class_weight": "balanced",
+    "random_state": SEED,
+    "n_jobs": -1
+}
+
+rf_1 = RandomForestClassifier(
+    **rf_config_1
+)
+
+print("Training Random Forest - Configuration 1...")
+
+rf_1.fit(
+    X_train_tfidf,
+    y_train
+)
+
+rf_val_pred_1 = rf_1.predict(
+    X_val_tfidf
+)
+
+rf_result_1 = evaluate_model(
+    model_name="Random Forest",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=rf_val_pred_1,
+    split="validation",
+    configuration="RF-1"
+)
+
+record_tuning_result(
+    model="Random Forest",
+    representation="TF-IDF",
+    configuration="RF-1",
+    hyperparameters=rf_config_1,
+    validation_accuracy=rf_result_1["accuracy"],
+    validation_macro_f1=rf_result_1["macro_f1"]
+)
+
+rf_config_2 = {
+    "n_estimators": 150,
+    "max_depth": 30,
+    "min_samples_split": 5,
+    "class_weight": "balanced",
+    "random_state": SEED,
+    "n_jobs": -1
+}
+
+rf_2 = RandomForestClassifier(
+    **rf_config_2
+)
+
+print("Training Random Forest - Configuration 2...")
+
+rf_2.fit(
+    X_train_tfidf,
+    y_train
+)
+
+rf_val_pred_2 = rf_2.predict(
+    X_val_tfidf
+)
+
+rf_result_2 = evaluate_model(
+    model_name="Random Forest",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=rf_val_pred_2,
+    split="validation",
+    configuration="RF-2"
+)
+
+record_tuning_result(
+    model="Random Forest",
+    representation="TF-IDF",
+    configuration="RF-2",
+    hyperparameters=rf_config_2,
+    validation_accuracy=rf_result_2["accuracy"],
+    validation_macro_f1=rf_result_2["macro_f1"]
+)
+
+rf_config_3 = {
+    "n_estimators": 200,
+    "max_depth": 40,
+    "min_samples_split": 3,
+    "class_weight": "balanced",
+    "random_state": SEED,
+    "n_jobs": -1
+}
+
+rf_3 = RandomForestClassifier(
+    **rf_config_3
+)
+
+print("Training Random Forest - Configuration 3...")
+
+rf_3.fit(
+    X_train_tfidf,
+    y_train
+)
+
+rf_val_pred_3 = rf_3.predict(
+    X_val_tfidf
+)
+
+rf_result_3 = evaluate_model(
+    model_name="Random Forest",
+    representation="TF-IDF",
+    y_true=y_val,
+    y_pred=rf_val_pred_3,
+    split="validation",
+    configuration="RF-3"
+)
+
+record_tuning_result(
+    model="Random Forest",
+    representation="TF-IDF",
+    configuration="RF-3",
+    hyperparameters=rf_config_3,
+    validation_accuracy=rf_result_3["accuracy"],
+    validation_macro_f1=rf_result_3["macro_f1"]
+)
+
+tuning_df = pd.DataFrame(
+    tuning_results
+)
+
+print(
+    tuning_df[
+        tuning_df["model"] == "Random Forest"
+    ].sort_values(
+        "validation_macro_f1",
+        ascending=False
+    ).to_string(index=False)
+)
+
+tuning_df = pd.DataFrame(
+    tuning_results
+)
+
+classical_results = (
+    tuning_df[
+        tuning_df["model"].isin([
+            "Logistic Regression",
+            "Naive Bayes",
+            "Random Forest"
+        ])
+    ]
+    .sort_values(
+        "validation_macro_f1",
+        ascending=False
+    )
+)
+
+print(
+    classical_results.to_string(
+        index=False
+    )
+)
+
+best_classical = (
+    classical_results
+    .sort_values(
+        "validation_macro_f1",
+        ascending=False
+    )
+    .groupby("model")
+    .head(1)
+    .sort_values(
+        "validation_macro_f1",
+        ascending=False
+    )
+)
+
+print("\nBEST CONFIGURATION FOR EACH CLASSICAL MODEL")
+print("=" * 70)
+
+print(
+    best_classical.to_string(
+        index=False
+    )
+)
+
+def evaluate_final_model(
+    model,
+    X_test_data,
+    y_test_data,
+    model_name,
+    representation,
+    configuration
+):
+
+
+    predictions = model.predict(X_test_data)
+
+
+    probabilities = model.predict_proba(X_test_data)
+
+
+    accuracy = accuracy_score(
+        y_test_data,
+        predictions
+    )
+
+    macro_f1 = f1_score(
+        y_test_data,
+        predictions,
+        average="macro"
+    )
+
+    weighted_f1 = f1_score(
+        y_test_data,
+        predictions,
+        average="weighted"
+    )
+
+    print("=" * 70)
+    print(f"FINAL TEST EVALUATION: {model_name}")
+    print("=" * 70)
+
+    print(f"Best Configuration: {configuration}")
+    print(f"Representation: {representation}")
+    print(f"Test Accuracy: {accuracy:.4f}")
+    print(f"Test Macro F1: {macro_f1:.4f}")
+    print(f"Test Weighted F1: {weighted_f1:.4f}")
+
+    print("\nClassification Report:\n")
+
+    print(
+        classification_report(
+            y_test_data,
+            predictions,
+            target_names=class_names,
+            digits=4
+        )
+    )
+
+    plot_confusion_matrix(
+        y_test_data,
+        predictions,
+        f"{model_name} - Confusion Matrix"
+    )
+
+    return {
+        "model": model_name,
+        "configuration": configuration,
+        "representation": representation,
+        "test_accuracy": accuracy,
+        "test_macro_f1": macro_f1,
+        "test_weighted_f1": weighted_f1,
+        "predictions": predictions,
+        "probabilities": probabilities
+    }
+
+def select_best_classical_model(
+    model_name,
+    models_dict
+):
+
+    tuning_df = pd.DataFrame(
+        tuning_results
+    )
+
+    model_results = (
+        tuning_df[
+            tuning_df["model"] == model_name
+        ]
+        .sort_values(
+            "validation_macro_f1",
+            ascending=False
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+    print("=" * 70)
+    print(
+        f"{model_name} HYPERPARAMETER TUNING RESULTS"
+    )
+    print("=" * 70)
+
+    display(
+        model_results
+    )
+
+    best_configuration = model_results.loc[
+        0,
+        "configuration"
+    ]
+
+    best_model = models_dict[
+        best_configuration
+    ]
+
+    best_validation_accuracy = model_results.loc[
+        0,
+        "validation_accuracy"
+    ]
+
+    best_validation_f1 = model_results.loc[
+        0,
+        "validation_macro_f1"
+    ]
+
+    print("\nBest Configuration:")
+    print(
+        best_configuration
+    )
+
+    print("\nBest Validation Accuracy:")
+    print(
+        round(
+            best_validation_accuracy,
+            4
+        )
+    )
+
+    print("\nBest Validation Macro F1:")
+    print(
+        round(
+            best_validation_f1,
+            4
+        )
+    )
+
+    return (
+        best_model,
+        best_configuration,
+        best_validation_f1,
+        model_results
+    )
+
+lr_models = {
+
+    "LR-1": lr_1,
+
+    "LR-2": lr_2,
+
+    "LR-3": lr_3
+}
+(
+    best_lr_model,
+    best_lr_config,
+    best_lr_val_f1,
+    lr_tuning_df
+) = select_best_classical_model(
+    "Logistic Regression",
+    lr_models
+)
+lr_final_result = evaluate_final_model(
+    model=best_lr_model,
+    X_test_data=X_test_tfidf,
+    y_test_data=y_test,
+    model_name=f"Logistic Regression ({best_lr_config})",
+    representation="TF-IDF",
+    configuration=best_lr_config
+)
+
+nb_models = {
+
+    "NB-1": nb_1,
+
+    "NB-2": nb_2,
+
+    "NB-3": nb_3
+}
+(
+    best_nb_model,
+    best_nb_config,
+    best_nb_val_f1,
+    nb_tuning_df
+) = select_best_classical_model(
+    "Naive Bayes",
+    nb_models
+)
+nb_final_result = evaluate_final_model(
+    model=best_nb_model,
+    X_test_data=X_test_tfidf,
+    y_test_data=y_test,
+    model_name=f"Naive Bayes ({best_nb_config})",
+    representation="TF-IDF",
+    configuration=best_nb_config
+)
+
+rf_models = {
+
+    "RF-1": rf_1,
+
+    "RF-2": rf_2,
+
+    "RF-3": rf_3
+}
+(
+    best_rf_model,
+    best_rf_config,
+    best_rf_val_f1,
+    rf_tuning_df
+) = select_best_classical_model(
+    "Random Forest",
+    rf_models
+)
+rf_final_result = evaluate_final_model(
+    model=best_rf_model,
+    X_test_data=X_test_tfidf,
+    y_test_data=y_test,
+    model_name=f"Random Forest ({best_rf_config})",
+    representation="TF-IDF",
+    configuration=best_rf_config
+)
+
+all_classical_tuning_results = pd.concat(
+    [
+        lr_tuning_df,
+        nb_tuning_df,
+        rf_tuning_df
+    ],
+    ignore_index=True
+)
+
+all_classical_tuning_results = (
+    all_classical_tuning_results
+    .sort_values(
+        "validation_macro_f1",
+        ascending=False
+    )
+    .reset_index(
+        drop=True
+    )
+)
+display(
+    all_classical_tuning_results
+)
+all_classical_tuning_results.to_csv(
+    "classical_hyperparameter_tuning.csv",
+    index=False
+)
+
+best_classical_models_df = (
+    all_classical_tuning_results
+    .sort_values(
+        "validation_macro_f1",
+        ascending=False
+    )
+    .groupby(
+        "model",
+        as_index=False
+    )
+    .first()
+    .sort_values(
+        "validation_macro_f1",
+        ascending=False
+    )
+    .reset_index(
+        drop=True
+    )
+)
+
+print("=" * 70)
+print("BEST CLASSICAL MODEL CONFIGURATIONS")
+print("=" * 70)
+
+display(
+    best_classical_models_df
+)
+
+best_classical_plot = best_classical.copy()
+
+plt.figure(figsize=(10, 6))
+
+sns.barplot(
+    data=best_classical_plot,
+    x="model",
+    y="validation_macro_f1"
+)
+
+plt.title(
+    "Best Classical Model Performance - Macro F1"
+)
+
+plt.xlabel("Model")
+plt.ylabel("Validation Macro-F1")
+
+plt.ylim(0, 1)
+
+plt.tight_layout()
+plt.show()
+
+tuning_df.to_csv(
+    "classical_tuning_results.csv",
+    index=False
+)
+
+print(
+    "Saved: classical_tuning_results.csv"
+)
+
+best_classical.to_csv(
+    "best_classical_models.csv",
+    index=False
+)
+
+print(
+    "Saved: best_classical_models.csv"
+)
+
+train_tokens = [
+    text.split()
+    for text in X_train_clean
+]
+
+val_tokens = [
+    text.split()
+    for text in X_val_clean
+]
+
+test_tokens = [
+    text.split()
+    for text in X_test_clean
+]
+
+print("Training documents:", len(train_tokens))
+print("Validation documents:", len(val_tokens))
+print("Test documents:", len(test_tokens))
+
+print("\nExample tokens:")
+print(train_tokens[0][:30])
+
+from collections import Counter
+
+word_counter = Counter(
+    word
+    for document in train_tokens
+    for word in document
+)
+
+print("Unique training vocabulary:", len(word_counter))
+
+print("\nMost common 30 words:")
+print(
+    word_counter.most_common(30)
+)
+
+from gensim.models import Word2Vec
+import multiprocessing
+
+w2v_workers = max(
+    1,
+    multiprocessing.cpu_count() - 1
+)
+
+print("Training Word2Vec...")
+print("Workers:", w2v_workers)
+
+word2vec_model = Word2Vec(
+    sentences=train_tokens,
+    vector_size=100,
+    window=5,
+    min_count=3,
+    workers=w2v_workers,
+    sg=1,
+    negative=5,
+    epochs=10,
+    seed=SEED
+)
+
+print("\nWord2Vec training completed.")
+
+print(
+    "Vocabulary size:",
+    len(word2vec_model.wv)
+)
+
+print(
+    "Embedding dimension:",
+    word2vec_model.wv.vector_size
+)
