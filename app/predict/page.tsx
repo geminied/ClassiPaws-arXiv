@@ -1,448 +1,1143 @@
 "use client";
 
-import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  Brain,
-  Sparkles,
-  FileText,
-  Target,
-  RotateCcw,
-  ArrowRight,
-  CheckCircle2,
+  useEffect,
+  useMemo,
+  useState,
+  Suspense,
+} from "react";
+
+import {
+  getPaper,
+  predictPaper,
+} from "@/lib/api";
+
+import {
+  Search,
+  RefreshCcw,
 } from "lucide-react";
 
-const classes = [
-  "Dataset Paper",
-  "Benchmark",
-  "Survey",
-  "Novel Model",
-  "Optimization",
-  "Evaluation",
-  "Theory",
-  "Application",
-];
+/* =========================================================
+   TYPES
+========================================================= */
+
+type Paper = {
+  id: string;
+  title: string;
+  abstract: string;
+  authors: string;
+  target_classname: string;
+};
+
+type PredictionResult = {
+  predicted_class: string;
+  confidence: number;
+  probabilities?: Record<string, number>;
+};
+
+/* =========================================================
+   MAIN PREDICTION CONTENT
+========================================================= */
 
 function PredictContent() {
+  /* =======================================================
+     URL SEARCH PARAMS
+  ======================================================= */
+
   const searchParams = useSearchParams();
 
-  const initialText = searchParams.get("text") || "";
+  const requestedPaper =
+    searchParams.get("paper");
 
-  const [abstract, setAbstract] = useState(initialText);
-  const [model, setModel] = useState("BERT");
-  const [targetClass, setTargetClass] = useState("Auto");
-  const [loading, setLoading] = useState(false);
-  const [prediction, setPrediction] = useState<string | null>(null);
-  const [confidence, setConfidence] = useState<number | null>(null);
+  /*
+   * If a paper ID exists in the URL, start directly
+   * in dataset mode.
+   *
+   * This avoids calling setMode() inside an effect,
+   * which can cause React's cascading render warning.
+   */
+  const [mode, setMode] =
+    useState<"manual" | "dataset">(
+      requestedPaper
+        ? "dataset"
+        : "manual"
+    );
 
-  const handlePredict = async () => {
-    if (!abstract.trim()) return;
+  /* =======================================================
+     DATASET PAPERS
+  ======================================================= */
 
-    setLoading(true);
-    setPrediction(null);
-    setConfidence(null);
+  const [papers, setPapers] =
+    useState<Paper[]>([]);
 
-    /*
-     * TEMPORARY FRONTEND DEMO LOGIC
-     *
-     * This is NOT the real ML backend.
-     * Later we will replace this section with:
-     *
-     * const response = await fetch("/api/predict", {
-     *   method: "POST",
-     *   headers: { "Content-Type": "application/json" },
-     *   body: JSON.stringify({
-     *     abstract,
-     *     model,
-     *     targetClass,
-     *   }),
-     * });
-     *
-     * const result = await response.json();
-     */
+  const [loadingPapers, setLoadingPapers] =
+    useState(false);
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+  const [paperSearch, setPaperSearch] =
+    useState("");
 
-    const text = abstract.toLowerCase();
+  const [selectedPaper, setSelectedPaper] =
+    useState<Paper | null>(null);
 
-    let result = "Novel Model";
-    let score = 87;
+  /* =======================================================
+     PAPER INPUT
+  ======================================================= */
 
+  const [title, setTitle] =
+    useState("");
+
+  const [abstract, setAbstract] =
+    useState("");
+
+  /* =======================================================
+     PREDICTION
+  ======================================================= */
+
+  const [prediction, setPrediction] =
+    useState<PredictionResult | null>(null);
+
+  const [predicting, setPredicting] =
+    useState(false);
+
+  /* =======================================================
+     ERROR
+  ======================================================= */
+
+  const [error, setError] =
+    useState<string | null>(null);
+
+  /* =======================================================
+     LOAD DATASET PAPERS
+     
+     This runs when:
+     
+     1. User switches to dataset mode
+     OR
+     2. A paper is provided through the URL
+     
+     Example:
+     
+     /prediction?paper=1234.5678
+  ======================================================= */
+
+  useEffect(() => {
     if (
-      text.includes("dataset") ||
-      text.includes("data collection") ||
-      text.includes("corpus")
+      mode !== "dataset" &&
+      requestedPaper === null
     ) {
-      result = "Dataset Paper";
-      score = 94;
-    } else if (
-      text.includes("survey") ||
-      text.includes("review") ||
-      text.includes("systematic review")
-    ) {
-      result = "Survey";
-      score = 92;
-    } else if (
-      text.includes("benchmark") ||
-      text.includes("baseline comparison")
-    ) {
-      result = "Benchmark";
-      score = 91;
-    } else if (
-      text.includes("optimization") ||
-      text.includes("optimize") ||
-      text.includes("hyperparameter")
-    ) {
-      result = "Optimization";
-      score = 89;
-    } else if (
-      text.includes("evaluation") ||
-      text.includes("evaluate") ||
-      text.includes("performance")
-    ) {
-      result = "Evaluation";
-      score = 86;
-    } else if (
-      text.includes("theoretical") ||
-      text.includes("theorem") ||
-      text.includes("proof")
-    ) {
-      result = "Theory";
-      score = 84;
-    } else if (
-      text.includes("application") ||
-      text.includes("real-world") ||
-      text.includes("clinical")
-    ) {
-      result = "Application";
-      score = 88;
+      return;
     }
 
-    setPrediction(result);
-    setConfidence(score);
-    setLoading(false);
-  };
+    let cancelled = false;
 
-  const resetPrediction = () => {
+    async function loadPapers() {
+      try {
+        setLoadingPapers(true);
+        setError(null);
+
+        const response =
+          await fetch("/api/papers");
+
+        if (!response.ok) {
+          throw new Error(
+            "Failed to load papers"
+          );
+        }
+
+        const data =
+          await response.json();
+
+        if (cancelled) {
+          return;
+        }
+
+        /*
+         * Your FastAPI backend returns:
+         *
+         * {
+         *   count: number,
+         *   papers: [...]
+         * }
+         *
+         * But if your Next.js API route already returns
+         * the array directly, this also supports that.
+         */
+
+        const paperList: Paper[] =
+          Array.isArray(data)
+            ? data
+            : data.papers || [];
+
+        setPapers(paperList);
+
+      } catch (err) {
+        if (!cancelled) {
+          console.error(err);
+
+          setError(
+            "Could not load dataset papers."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingPapers(false);
+        }
+      }
+    }
+
+    loadPapers();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, requestedPaper]);
+
+  /* =======================================================
+     LOAD PAPER FROM URL
+     
+     Example:
+     
+     /prediction?paper=1234.5678
+     
+     requestedPaper has the type:
+     
+     string | null
+     
+     We check for null before passing it to getPaper().
+     
+     IMPORTANT:
+     
+     This effect DOES NOT call setMode().
+     
+     That prevents the React cascading render warning.
+  ======================================================= */
+
+  useEffect(() => {
+    if (requestedPaper === null) {
+      return;
+    }
+
+    /*
+     * TypeScript now knows that requestedPaper
+     * is a string.
+     */
+    const paperId = requestedPaper;
+
+    let cancelled = false;
+
+    async function loadRequestedPaper() {
+      try {
+        setError(null);
+
+        const paper =
+          await getPaper(paperId);
+
+        if (cancelled) {
+          return;
+        }
+
+        setSelectedPaper(paper);
+
+        setTitle(
+          paper.title || ""
+        );
+
+        setAbstract(
+          paper.abstract?.trim() || ""
+        );
+
+      } catch (err) {
+        if (!cancelled) {
+          console.error(err);
+
+          setError(
+            "Could not load the selected paper."
+          );
+        }
+      }
+    }
+
+    loadRequestedPaper();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [requestedPaper]);
+
+  /* =======================================================
+     FILTER DATASET PAPERS
+  ======================================================= */
+
+  const filteredPapers =
+    useMemo(() => {
+      const query =
+        paperSearch
+          .trim()
+          .toLowerCase();
+
+      /*
+       * No search query:
+       * show first 12 papers.
+       */
+
+      if (!query) {
+        return papers.slice(0, 12);
+      }
+
+      /*
+       * Search by:
+       *
+       * - title
+       * - authors
+       * - arXiv ID
+       */
+
+      return papers
+        .filter((paper) => {
+          return (
+            paper.title
+              ?.toLowerCase()
+              .includes(query) ||
+
+            paper.authors
+              ?.toLowerCase()
+              .includes(query) ||
+
+            paper.id
+              ?.toLowerCase()
+              .includes(query)
+          );
+        })
+        .slice(0, 12);
+
+    }, [
+      papers,
+      paperSearch,
+    ]);
+
+  /* =======================================================
+     SELECT DATASET PAPER
+     
+     Selecting a paper automatically fills:
+     
+     📖 Title
+     📝 Abstract
+     
+     The user can still edit both afterwards.
+  ======================================================= */
+
+  function choosePaper(
+    paper: Paper
+  ) {
+    setSelectedPaper(paper);
+
+    setTitle(
+      paper.title || ""
+    );
+
+    setAbstract(
+      paper.abstract?.trim() || ""
+    );
+
     setPrediction(null);
-    setConfidence(null);
+
+    setError(null);
+  }
+
+  /* =======================================================
+     SWITCH INPUT MODE
+  ======================================================= */
+
+  function switchMode(
+    nextMode:
+      | "manual"
+      | "dataset"
+  ) {
+    setMode(nextMode);
+
+    setPrediction(null);
+
+    setError(null);
+
+    if (
+      nextMode === "manual"
+    ) {
+      setSelectedPaper(null);
+    }
+  }
+
+  /* =======================================================
+     CLEAR FORM
+  ======================================================= */
+
+  function clearForm() {
+    setSelectedPaper(null);
+
+    setTitle("");
+
     setAbstract("");
-  };
+
+    setPrediction(null);
+
+    setError(null);
+
+    setPaperSearch("");
+  }
+
+  /* =======================================================
+     PREDICT
+     
+     Calls the real FastAPI backend through:
+     
+     predictPaper(title, abstract)
+     
+     from:
+     
+     @/lib/api
+  ======================================================= */
+
+  async function handlePredict() {
+    /*
+     * Both title and abstract are required.
+     */
+
+    if (
+      !title.trim() ||
+      !abstract.trim()
+    ) {
+      setError(
+        "Please provide both a title and an abstract."
+      );
+
+      return;
+    }
+
+    try {
+      setPredicting(true);
+
+      setPrediction(null);
+
+      setError(null);
+
+      /*
+       * Call the real backend.
+       */
+
+      const result =
+        await predictPaper(
+          title.trim(),
+          abstract.trim()
+        );
+
+      /*
+       * Store the prediction result.
+       */
+
+      setPrediction(result);
+
+    } catch (err) {
+      console.error(err);
+
+      if (
+        err instanceof Error
+      ) {
+        setError(
+          err.message
+        );
+      } else {
+        setError(
+          "Prediction failed. Please try again."
+        );
+      }
+
+    } finally {
+      setPredicting(false);
+    }
+  }
+
+  /* =======================================================
+     PAGE
+  ======================================================= */
 
   return (
-    <div className="page">
-      <div className="section-head">
-        <div>
-          <span className="pill">
-            <Sparkles size={13} />
-            AI PAPER CLASSIFIER
-          </span>
+    <main className="page">
 
-          <h1 style={{ marginTop: "12px" }}>
-            Predict a paper&apos;s{" "}
-            <span style={{ color: "var(--purple)" }}>contribution.</span>
+      {/* =================================================
+          HEADER
+      ================================================= */}
+
+      <div className="section-head">
+
+        <div>
+
+          <div
+            style={{
+              color:
+                "var(--pink)",
+              fontWeight: 900,
+              fontSize: 12,
+              marginBottom: 7,
+            }}
+          >
+            🐾 CLASSIFICATION PLAYGROUND
+          </div>
+
+          <h1>
+            Let&apos;s classify a paper! 🐱✨
           </h1>
 
-          <p style={{ maxWidth: "650px" }}>
-            Paste a research-paper abstract and let the classification model
-            determine what kind of contribution the paper makes.
+          <p>
+            Give your research buddy a
+            title and abstract and let&apos;s
+            see what it discovers.
           </p>
+
         </div>
+
+        <button
+          className="btn btn-soft"
+          onClick={clearForm}
+          type="button"
+        >
+          <RefreshCcw
+            size={14}
+            style={{
+              verticalAlign:
+                "middle",
+              marginRight: 5,
+            }}
+          />
+
+          Clear
+        </button>
+
       </div>
 
-      <div className="prediction">
-        {/* LEFT SIDE */}
-        <div className="card form">
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              marginBottom: "20px",
-            }}
-          >
-            <div className="icon" style={{ marginBottom: 0 }}>
-              <FileText size={20} />
-            </div>
+      {/* =================================================
+          ERROR MESSAGE
+      ================================================= */}
 
-            <div>
-              <h2 style={{ fontSize: "20px" }}>Paper information</h2>
-              <p style={{ margin: "3px 0 0" }}>
-                Provide the abstract you want to classify.
-              </p>
-            </div>
-          </div>
+      {error && (
+        <div
+          style={{
+            marginBottom: 18,
+            padding: 14,
+            borderRadius: 14,
+            background:
+              "var(--soft-pink)",
+            color:
+              "#b64d78",
+            fontSize: 12,
+            fontWeight: 800,
+            border:
+              "1px solid #f4bfd4",
+          }}
+        >
+          🥺 {error}
+        </div>
+      )}
 
-          <label>
-            TARGET CLASS
-            <select
-              className="select"
-              value={targetClass}
-              onChange={(e) => setTargetClass(e.target.value)}
-            >
-              <option value="Auto">Auto detect</option>
+      {/* =================================================
+          MAIN FORM
+      ================================================= */}
 
-              {classes.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
+      <section
+        className="card form-card"
+      >
 
-          <label>
-            MODEL
-            <select
-              className="select"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-            >
-              <option value="BERT">BERT</option>
-              <option value="BiGRU">BiGRU</option>
-              <option value="Logistic Regression">
-                Logistic Regression
-              </option>
-              <option value="Random Forest">Random Forest</option>
-            </select>
-          </label>
+        {/* =================================================
+            MODE SWITCH
+        ================================================= */}
 
-          <label>
-            RESEARCH PAPER ABSTRACT
-            <textarea
-              className="textarea"
-              placeholder="Paste the research paper abstract here..."
-              value={abstract}
-              onChange={(e) => setAbstract(e.target.value)}
-            />
-          </label>
-
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: "15px",
-            }}
-          >
-            <small style={{ color: "var(--muted)" }}>
-              {abstract.length} characters
-            </small>
-
-            <button
-              className="btn ghost small"
-              type="button"
-              onClick={resetPrediction}
-            >
-              <RotateCcw size={13} />
-              Clear
-            </button>
-          </div>
+        <div className="mode-switch">
 
           <button
-            className="btn primary full"
             type="button"
-            onClick={handlePredict}
-            disabled={loading || !abstract.trim()}
-            style={{
-              opacity: loading || !abstract.trim() ? 0.6 : 1,
-              cursor: loading || !abstract.trim() ? "not-allowed" : "pointer",
-            }}
+            className={`mode-button ${
+              mode === "manual"
+                ? "active"
+                : ""
+            }`}
+            onClick={() =>
+              switchMode(
+                "manual"
+              )
+            }
           >
-            {loading ? (
-              <>
-                <Brain size={15} className="spin" />
-                Analyzing paper...
-              </>
-            ) : (
-              <>
-                <Sparkles size={15} />
-                Predict Classification
-                <ArrowRight size={15} />
-              </>
-            )}
+            ✍️ Manual Input
           </button>
+
+          <button
+            type="button"
+            className={`mode-button ${
+              mode === "dataset"
+                ? "active"
+                : ""
+            }`}
+            onClick={() =>
+              switchMode(
+                "dataset"
+              )
+            }
+          >
+            📚 Choose Dataset Paper
+          </button>
+
         </div>
 
-        {/* RIGHT SIDE */}
-        <div className="card result">
+        {/* =================================================
+            DATASET MODE
+        ================================================= */}
+
+        {mode === "dataset" && (
           <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              marginBottom: "10px",
-            }}
+            className="dataset-picker"
           >
-            <div className="icon" style={{ marginBottom: 0 }}>
-              <Target size={20} />
+
+            <div
+              className="dataset-picker-title"
+            >
+              📚 Pick a paper from
+              your dataset
             </div>
 
-            <div>
-              <h2 style={{ fontSize: "20px" }}>Prediction</h2>
-              <p style={{ margin: "3px 0 0" }}>
-                Model classification result
-              </p>
+            {/* SEARCH */}
+
+            <div
+              className="search-box"
+            >
+
+              <Search
+                size={17}
+              />
+
+              <input
+                className="input"
+                value={
+                  paperSearch
+                }
+                onChange={(e) =>
+                  setPaperSearch(
+                    e.target.value
+                  )
+                }
+                placeholder="Search by title, author, or arXiv ID..."
+              />
+
             </div>
-          </div>
 
-          {!prediction && !loading && (
-            <div className="empty">
-              <div>🐾</div>
+            {/* PAPER LIST */}
 
-              <h3
-                style={{
-                  fontFamily: "Nunito",
-                  color: "var(--ink)",
-                  margin: "10px 0 5px",
-                }}
-              >
-                Ready when you are
-              </h3>
+            <div
+              style={{
+                marginTop: 12,
+                maxHeight: 300,
+                overflowY:
+                  "auto",
+                display:
+                  "flex",
+                flexDirection:
+                  "column",
+                gap: 7,
+              }}
+            >
 
-              <p>
-                Add a research abstract on the left and ClassiPaws will
-                analyze it.
-              </p>
-            </div>
-          )}
+              {/* LOADING */}
 
-          {loading && (
-            <div className="empty">
-              <div>
-                <Brain size={44} className="spin" />
-              </div>
-
-              <h3
-                style={{
-                  fontFamily: "Nunito",
-                  color: "var(--ink)",
-                  margin: "10px 0 5px",
-                }}
-              >
-                Reading the paper...
-              </h3>
-
-              <p>
-                The classifier is analyzing the research contribution.
-              </p>
-            </div>
-          )}
-
-          {prediction && !loading && (
-            <>
-              <div className="prediction-main">
-                <div>🎯</div>
-
-                <h2>{prediction}</h2>
-
-                <b>
-                  <CheckCircle2
-                    size={14}
-                    style={{
-                      verticalAlign: "middle",
-                      marginRight: "4px",
-                    }}
-                  />
-                  Classification complete
-                </b>
-              </div>
-
-              <div className="card" style={{ padding: "15px" }}>
+              {loadingPapers && (
                 <div
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
+                    padding: 20,
+                    textAlign:
+                      "center",
+                    color:
+                      "var(--muted)",
+                    fontSize: 12,
                   }}
                 >
-                  <strong style={{ fontSize: "12px" }}>
-                    Confidence
-                  </strong>
+                  🐾 Looking through
+                  the papers...
+                </div>
+              )}
 
-                  <strong
+              {/* PAPERS */}
+
+              {!loadingPapers &&
+                filteredPapers.map(
+                  (paper) => (
+                    <button
+                      key={
+                        paper.id
+                      }
+                      type="button"
+                      onClick={() =>
+                        choosePaper(
+                          paper
+                        )
+                      }
+                      style={{
+                        textAlign:
+                          "left",
+
+                        border:
+                          selectedPaper?.id ===
+                          paper.id
+                            ? "2px solid var(--purple)"
+                            : "1px solid var(--border)",
+
+                        background:
+                          "white",
+
+                        borderRadius:
+                          13,
+
+                        padding:
+                          12,
+
+                        cursor:
+                          "pointer",
+                      }}
+                    >
+
+                      {/* TITLE */}
+
+                      <strong
+                        style={{
+                          display:
+                            "block",
+
+                          color:
+                            "var(--purple)",
+
+                          fontSize:
+                            12,
+                        }}
+                      >
+                        {paper.title}
+                      </strong>
+
+                      {/* AUTHORS */}
+
+                      <small
+                        style={{
+                          display:
+                            "block",
+
+                          marginTop:
+                            5,
+
+                          color:
+                            "var(--muted)",
+                        }}
+                      >
+                        {paper.authors}
+                      </small>
+
+                      {/* CLASS */}
+
+                      {paper.target_classname && (
+                        <span
+                          className="class-badge"
+                          style={{
+                            display:
+                              "inline-block",
+
+                            marginTop:
+                              7,
+                          }}
+                        >
+                          {
+                            paper.target_classname
+                          }
+                        </span>
+                      )}
+
+                    </button>
+                  )
+                )}
+
+              {/* NO RESULTS */}
+
+              {!loadingPapers &&
+                filteredPapers.length ===
+                  0 && (
+                  <div
                     style={{
-                      color: "var(--purple)",
-                      fontFamily: "Nunito",
+                      padding:
+                        20,
+
+                      textAlign:
+                        "center",
+
+                      color:
+                        "var(--muted)",
                     }}
                   >
-                    {confidence}%
-                  </strong>
-                </div>
-
-                <div className="progress">
-                  <i
-                    style={{
-                      width: `${confidence}%`,
-                    }}
-                  />
-                </div>
-
-                <small style={{ color: "var(--muted)" }}>
-                  Predicted using {model}
-                </small>
-              </div>
-
-              <div style={{ marginTop: "15px" }}>
-                <div className="prob">
-                  <div>
-                    <span>{prediction}</span>
-                    <span>{confidence}%</span>
+                    🥺 No papers
+                    found.
                   </div>
+                )}
 
-                  <i>
-                    <em style={{ width: `${confidence}%` }} />
-                  </i>
-                </div>
+            </div>
 
-                <div className="prob">
-                  <div>
-                    <span>Other classes</span>
-                    <span>{100 - (confidence || 0)}%</span>
-                  </div>
+            {/* SELECTED PAPER */}
 
-                  <i>
-                    <em
-                      style={{
-                        width: `${100 - (confidence || 0)}%`,
-                      }}
-                    />
-                  </i>
-                </div>
-              </div>
+            {selectedPaper && (
+              <div
+                style={{
+                  marginTop:
+                    12,
 
-              <div className="notice">
-                <strong>Target class:</strong>{" "}
-                {targetClass === "Auto"
-                  ? "Automatic classification"
-                  : targetClass}
-              </div>
+                  color:
+                    "var(--mint)",
 
-              <button
-                className="btn ghost full"
-                type="button"
-                onClick={resetPrediction}
+                  fontWeight:
+                    800,
+
+                  fontSize:
+                    11,
+                }}
               >
-                <RotateCcw size={14} />
-                Analyze another paper
-              </button>
-            </>
-          )}
+                ✓ Selected:{" "}
+                {
+                  selectedPaper.id
+                }
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* =================================================
+            TITLE
+        ================================================= */}
+
+        <div className="field">
+
+          <label>
+            📖 Paper Title
+          </label>
+
+          <input
+            className="input"
+            value={title}
+            onChange={(e) => {
+              setTitle(
+                e.target.value
+              );
+
+              /*
+               * If the user edits a dataset paper,
+               * it is still okay. The selected paper
+               * remains associated with the form.
+               */
+            }}
+            placeholder="Enter the research paper title..."
+          />
+
         </div>
-      </div>
-    </div>
+
+        {/* =================================================
+            ABSTRACT
+        ================================================= */}
+
+        <div className="field">
+
+          <label>
+            📝 Abstract
+          </label>
+
+          <textarea
+            className="textarea"
+            value={abstract}
+            onChange={(e) => {
+              setAbstract(
+                e.target.value
+              );
+            }}
+            placeholder="Paste or type the paper abstract here..."
+          />
+
+        </div>
+
+        {/* =================================================
+            DATASET INFORMATION
+        ================================================= */}
+
+        {selectedPaper && (
+          <div
+            style={{
+              padding: 13,
+              marginBottom:
+                18,
+
+              borderRadius:
+                14,
+
+              background:
+                "var(--mint-light)",
+
+              color:
+                "#458d71",
+
+              fontSize:
+                11,
+
+              fontWeight:
+                700,
+            }}
+          >
+            🐾 This information
+            came from dataset
+            paper{" "}
+            <strong>
+              {
+                selectedPaper.id
+              }
+            </strong>
+            . You can still edit
+            it before predicting.
+          </div>
+        )}
+
+        {/* =================================================
+            PREDICT BUTTON
+        ================================================= */}
+
+        <button
+          className="btn btn-primary"
+          onClick={
+            handlePredict
+          }
+          disabled={
+            predicting
+          }
+          type="button"
+        >
+          {predicting
+            ? "🐾 Thinking..."
+            : "✨ Predict Contribution"}
+        </button>
+
+      </section>
+
+      {/* ===================================================
+          PREDICTION RESULT
+      =================================================== */}
+
+      {prediction && (
+        <section
+          className="prediction-result"
+        >
+
+          <div
+            className="prediction-cat"
+          >
+            🐱
+          </div>
+
+          <div
+            style={{
+              color:
+                "var(--pink)",
+
+              fontSize:
+                11,
+
+              fontWeight:
+                900,
+            }}
+          >
+            PAWSITIVE RESULT! ✨
+          </div>
+
+          {/* PREDICTED CLASS */}
+
+          <div
+            className="prediction-label"
+          >
+            {
+              prediction.predicted_class
+            }
+          </div>
+
+          {/* CONFIDENCE */}
+
+          <div
+            className="confidence"
+          >
+            {(
+              prediction.confidence *
+              100
+            ).toFixed(1)}
+            % confidence
+          </div>
+
+          {/* =================================================
+              PROBABILITY BREAKDOWN
+          ================================================= */}
+
+          {prediction.probabilities &&
+            Object.keys(
+              prediction.probabilities
+            ).length > 0 && (
+              <div
+                style={{
+                  width:
+                    "100%",
+                  maxWidth:
+                    500,
+                  marginTop:
+                    20,
+                }}
+              >
+
+                <div
+                  style={{
+                    color:
+                      "var(--purple)",
+                    fontWeight:
+                      900,
+                    fontSize:
+                      12,
+                    marginBottom:
+                      10,
+                  }}
+                >
+                  🌸 Confidence
+                  breakdown
+                </div>
+
+                {Object.entries(
+                  prediction.probabilities
+                )
+                  .sort(
+                    (
+                      [, a],
+                      [, b]
+                    ) => b - a
+                  )
+                  .map(
+                    ([
+                      className,
+                      probability,
+                    ]) => (
+                      <div
+                        key={
+                          className
+                        }
+                        style={{
+                          marginBottom:
+                            9,
+                        }}
+                      >
+
+                        {/* CLASS + PERCENTAGE */}
+
+                        <div
+                          style={{
+                            display:
+                              "flex",
+                            justifyContent:
+                              "space-between",
+                            fontSize:
+                              11,
+                            fontWeight:
+                              800,
+                            marginBottom:
+                              4,
+                          }}
+                        >
+
+                          <span>
+                            🐾{" "}
+                            {
+                              className
+                            }
+                          </span>
+
+                          <span>
+                            {(
+                              probability *
+                              100
+                            ).toFixed(
+                              1
+                            )}
+                            %
+                          </span>
+
+                        </div>
+
+                        {/* PROGRESS BAR */}
+
+                        <div
+                          style={{
+                            width:
+                              "100%",
+                            height:
+                              8,
+                            borderRadius:
+                              999,
+                            background:
+                              "var(--soft)",
+                            overflow:
+                              "hidden",
+                          }}
+                        >
+
+                          <div
+                            style={{
+                              width: `${
+                                probability *
+                                100
+                              }%`,
+
+                              height:
+                                "100%",
+
+                              borderRadius:
+                                999,
+
+                              background:
+                                "var(--purple)",
+
+                              transition:
+                                "width 0.5s ease",
+                            }}
+                          />
+
+                        </div>
+
+                      </div>
+                    )
+                  )}
+
+              </div>
+            )}
+
+        </section>
+      )}
+
+    </main>
   );
 }
+
+/* =========================================================
+   PAGE EXPORT
+
+   Suspense is required because PredictContent uses
+   useSearchParams().
+========================================================= */
 
 export default function PredictPage() {
   return (
     <Suspense
       fallback={
-        <div className="page">
-          <div className="empty">
-            <div>🐾</div>
-            <p>Loading prediction...</p>
-          </div>
-        </div>
+        <main className="page">
+          🐾 Loading prediction
+          playground...
+        </main>
       }
     >
       <PredictContent />
