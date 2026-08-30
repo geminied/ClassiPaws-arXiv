@@ -1,6 +1,6 @@
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ||
-  "http://127.0.0.1:8000";
+  "${API_URL}";
 
 /* =========================================================
    TYPES
@@ -31,7 +31,7 @@ export type PapersResponse = {
 
 export async function getClasses() {
   const response = await fetch(
-    `http://127.0.0.1:8000/classes`
+    `${API_URL}/classes`
   );
 
   if (!response.ok) {
@@ -74,7 +74,7 @@ export async function searchPapers(
 
   const response =
     await fetch(
-      `http://127.0.0.1:8000/papers?${params.toString()}`
+      `${API_URL}/papers?${params.toString()}`
     );
 
   if (!response.ok) {
@@ -96,7 +96,7 @@ export async function getPaper(
 
   const response =
     await fetch(
-      `http://127.0.0.1:8000/papers/${encodeURIComponent(id)}`
+      `${API_URL}/papers/${encodeURIComponent(id)}`
     );
 
   if (!response.ok) {
@@ -119,7 +119,7 @@ export async function predictPaper(
 
   const response =
     await fetch(
-      `http://127.0.0.1:8000/predict`,
+      `${API_URL}/predict`,
       {
         method: "POST",
 
@@ -178,7 +178,7 @@ export async function getStats() {
 
   const response =
     await fetch(
-      `http://127.0.0.1:8000/stats`
+      `${API_URL}/stats`
     );
 
   if (!response.ok) {
@@ -198,7 +198,7 @@ export async function getModels() {
 
   const response =
     await fetch(
-      `http://127.0.0.1:8000/models`
+      `${API_URL}/models`
     );
 
   if (!response.ok) {
