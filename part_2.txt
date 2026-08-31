@@ -1,0 +1,2889 @@
+test_words = [
+    "model",
+    "data",
+    "physics",
+    "quantum",
+    "neural",
+    "algorithm",
+    "protein"
+]
+
+for word in test_words:
+    if word in word2vec_model.wv:
+        print(
+            f"{word:12s} -> available"
+        )
+    else:
+        print(
+            f"{word:12s} -> OOV"
+        )
+
+for word in ["physics", "neural", "algorithm"]:
+
+    if word in word2vec_model.wv:
+
+        print(
+            f"\nSimilar words to '{word}':"
+        )
+
+        print(
+            word2vec_model.wv.most_similar(
+                word,
+                topn=10
+            )
+        )
+
+word2vec_model.save(
+    "arxiv_word2vec_100d.model"
+)
+
+print(
+    "Saved: arxiv_word2vec_100d.model"
+)
+
+from tensorflow.keras.preprocessing.text import Tokenizer
+
+MAX_VOCAB_SIZE = 50000
+
+tokenizer = Tokenizer(
+    num_words=MAX_VOCAB_SIZE,
+    oov_token="<OOV>",
+    lower=False,
+    filters=""
+)
+
+tokenizer.fit_on_texts(
+    X_train_clean
+)
+
+word_index = tokenizer.word_index
+
+print(
+    "Tokenizer vocabulary:",
+    len(word_index)
+)
+
+print("\nFirst 20 vocabulary entries:")
+
+for word, index in list(word_index.items())[:20]:
+    print(index, "->", word)
+
+MAX_SEQUENCE_LENGTH = 250
+
+print(
+    "Maximum sequence length:",
+    MAX_SEQUENCE_LENGTH
+)
+
+X_train_seq = tokenizer.texts_to_sequences(
+    X_train_clean
+)
+
+X_val_seq = tokenizer.texts_to_sequences(
+    X_val_clean
+)
+
+X_test_seq = tokenizer.texts_to_sequences(
+    X_test_clean
+)
+
+print("Example sequence:")
+print(X_train_seq[0][:30])
+
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+X_train_pad = pad_sequences(
+    X_train_seq,
+    maxlen=MAX_SEQUENCE_LENGTH,
+    padding="post",
+    truncating="post"
+)
+
+X_val_pad = pad_sequences(
+    X_val_seq,
+    maxlen=MAX_SEQUENCE_LENGTH,
+    padding="post",
+    truncating="post"
+)
+
+X_test_pad = pad_sequences(
+    X_test_seq,
+    maxlen=MAX_SEQUENCE_LENGTH,
+    padding="post",
+    truncating="post"
+)
+
+print("Training shape:", X_train_pad.shape)
+print("Validation shape:", X_val_pad.shape)
+print("Test shape:", X_test_pad.shape)
+
+EMBEDDING_DIM = 100
+
+embedding_matrix = np.zeros(
+    (
+        MAX_VOCAB_SIZE + 1,
+        EMBEDDING_DIM
+    ),
+    dtype=np.float32
+)
+
+found_words = 0
+
+for word, index in word_index.items():
+
+    if index > MAX_VOCAB_SIZE:
+        continue
+
+    if word in word2vec_model.wv:
+        embedding_matrix[index] = (
+            word2vec_model.wv[word]
+        )
+        found_words += 1
+
+print(
+    "Embedding matrix shape:",
+    embedding_matrix.shape
+)
+
+print(
+    "Words found in Word2Vec:",
+    found_words
+)
+
+print(
+    "Coverage:",
+    f"{found_words / min(len(word_index), MAX_VOCAB_SIZE) * 100:.2f}%"
+)
+
+nonzero_rows = np.sum(
+    np.any(
+        embedding_matrix != 0,
+        axis=1
+    )
+)
+
+print(
+    "Non-zero embedding rows:",
+    nonzero_rows
+)
+
+print(
+    "Embedding dimension:",
+    embedding_matrix.shape[1]
+)
+
+print(
+    "\nSample embedding for first known word:"
+)
+
+for word, index in word_index.items():
+
+    if index <= MAX_VOCAB_SIZE and word in word2vec_model.wv:
+        print("Word:", word)
+        print("Index:", index)
+        print(
+            "Vector:",
+            embedding_matrix[index][:20]
+        )
+        break
+
+def document_vector(
+    tokens,
+    model,
+    vector_size=100
+):
+
+    vectors = [
+        model.wv[word]
+        for word in tokens
+        if word in model.wv
+    ]
+
+    if len(vectors) == 0:
+        return np.zeros(
+            vector_size,
+            dtype=np.float32
+        )
+
+    return np.mean(
+        vectors,
+        axis=0
+    )
+
+print("Creating Word2Vec document representations...")
+
+X_train_w2v = np.vstack([
+    document_vector(
+        tokens,
+        word2vec_model,
+        EMBEDDING_DIM
+    )
+    for tokens in train_tokens
+])
+
+X_val_w2v = np.vstack([
+    document_vector(
+        tokens,
+        word2vec_model,
+        EMBEDDING_DIM
+    )
+    for tokens in val_tokens
+])
+
+X_test_w2v = np.vstack([
+    document_vector(
+        tokens,
+        word2vec_model,
+        EMBEDDING_DIM
+    )
+    for tokens in test_tokens
+])
+
+print(
+    "Training shape:",
+    X_train_w2v.shape
+)
+
+print(
+    "Validation shape:",
+    X_val_w2v.shape
+)
+
+print(
+    "Test shape:",
+    X_test_w2v.shape
+)
+
+w2v_lr_config_1 = {
+    "C": 0.5,
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+w2v_lr_1 = LogisticRegression(
+    **w2v_lr_config_1
+)
+
+print(
+    "Training Word2Vec + Logistic Regression 1..."
+)
+
+w2v_lr_1.fit(
+    X_train_w2v,
+    y_train
+)
+
+w2v_lr_pred_1 = w2v_lr_1.predict(
+    X_val_w2v
+)
+
+w2v_lr_result_1 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=w2v_lr_pred_1,
+    split="validation",
+    configuration="W2V-LR-1"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="Word2Vec",
+    configuration="W2V-LR-1",
+    hyperparameters=w2v_lr_config_1,
+    validation_accuracy=w2v_lr_result_1["accuracy"],
+    validation_macro_f1=w2v_lr_result_1["macro_f1"]
+)
+
+w2v_lr_config_2 = {
+    "C": 1.0,
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+w2v_lr_2 = LogisticRegression(
+    **w2v_lr_config_2
+)
+
+print(
+    "Training Word2Vec + Logistic Regression 2..."
+)
+
+w2v_lr_2.fit(
+    X_train_w2v,
+    y_train
+)
+
+w2v_lr_pred_2 = w2v_lr_2.predict(
+    X_val_w2v
+)
+
+w2v_lr_result_2 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=w2v_lr_pred_2,
+    split="validation",
+    configuration="W2V-LR-2"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="Word2Vec",
+    configuration="W2V-LR-2",
+    hyperparameters=w2v_lr_config_2,
+    validation_accuracy=w2v_lr_result_2["accuracy"],
+    validation_macro_f1=w2v_lr_result_2["macro_f1"]
+)
+
+w2v_lr_config_3 = {
+    "C": 2.0,
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+w2v_lr_3 = LogisticRegression(
+    **w2v_lr_config_3
+)
+
+print(
+    "Training Word2Vec + Logistic Regression 3..."
+)
+
+w2v_lr_3.fit(
+    X_train_w2v,
+    y_train
+)
+
+w2v_lr_pred_3 = w2v_lr_3.predict(
+    X_val_w2v
+)
+
+w2v_lr_result_3 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=w2v_lr_pred_3,
+    split="validation",
+    configuration="W2V-LR-3"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="Word2Vec",
+    configuration="W2V-LR-3",
+    hyperparameters=w2v_lr_config_3,
+    validation_accuracy=w2v_lr_result_3["accuracy"],
+    validation_macro_f1=w2v_lr_result_3["macro_f1"]
+)
+
+w2v_results = (
+    pd.DataFrame(tuning_results)
+    .query("representation == 'Word2Vec'")
+    .sort_values(
+        "validation_macro_f1",
+        ascending=False
+    )
+)
+
+print(
+    w2v_results.to_string(
+        index=False
+    )
+)
+
+np.save(
+    "X_train_w2v.npy",
+    X_train_w2v
+)
+
+np.save(
+    "X_val_w2v.npy",
+    X_val_w2v
+)
+
+np.save(
+    "X_test_w2v.npy",
+    X_test_w2v
+)
+
+np.save(
+    "embedding_matrix_word2vec.npy",
+    embedding_matrix
+)
+
+print("Word2Vec representations saved.")
+
+import numpy as np
+
+glove_path = "glove.twitter.27B.100d.txt"
+
+glove_embeddings = {}
+
+print("Loading GloVe...")
+
+with open(
+    glove_path,
+    "r",
+    encoding="utf-8"
+) as f:
+
+    for line in f:
+
+        values = line.rstrip().split(" ")
+
+        word = values[0]
+
+        vector = np.asarray(
+            values[1:],
+            dtype=np.float32
+        )
+
+        glove_embeddings[word] = vector
+
+print(
+    "GloVe vocabulary:",
+    len(glove_embeddings)
+)
+
+print(
+    "GloVe dimension:",
+    len(next(iter(glove_embeddings.values())))
+)
+
+glove_found = 0
+glove_total = 0
+
+for word, index in word_index.items():
+
+    if index > MAX_VOCAB_SIZE:
+        continue
+
+    glove_total += 1
+
+    if word in glove_embeddings:
+        glove_found += 1
+
+print(
+    "Vocabulary checked:",
+    glove_total
+)
+
+print(
+    "Words found:",
+    glove_found
+)
+
+print(
+    "Coverage:",
+    f"{glove_found / glove_total * 100:.2f}%"
+)
+
+GLOVE_DIM = 100
+
+glove_embedding_matrix = np.zeros(
+    (
+        MAX_VOCAB_SIZE + 1,
+        GLOVE_DIM
+    ),
+    dtype=np.float32
+)
+
+glove_found = 0
+
+for word, index in word_index.items():
+
+    if index > MAX_VOCAB_SIZE:
+        continue
+
+    if word in glove_embeddings:
+
+        glove_embedding_matrix[index] = (
+            glove_embeddings[word]
+        )
+
+        glove_found += 1
+
+print(
+    "GloVe embedding matrix:",
+    glove_embedding_matrix.shape
+)
+
+print(
+    "Words found:",
+    glove_found
+)
+
+print(
+    "Coverage:",
+    f"{glove_found / glove_total * 100:.2f}%"
+)
+
+np.save(
+    "embedding_matrix_glove_100d.npy",
+    glove_embedding_matrix
+)
+
+print(
+    "Saved: embedding_matrix_glove_100d.npy"
+)
+
+def document_vector_glove(
+    tokens,
+    embeddings,
+    vector_size=100
+):
+
+    vectors = [
+        embeddings[word]
+        for word in tokens
+        if word in embeddings
+    ]
+
+    if len(vectors) == 0:
+        return np.zeros(
+            vector_size,
+            dtype=np.float32
+        )
+
+    return np.mean(
+        vectors,
+        axis=0
+    )
+
+print(
+    "Creating GloVe document representations..."
+)
+
+X_train_glove = np.vstack([
+    document_vector_glove(
+        tokens,
+        glove_embeddings,
+        GLOVE_DIM
+    )
+    for tokens in train_tokens
+])
+
+X_val_glove = np.vstack([
+    document_vector_glove(
+        tokens,
+        glove_embeddings,
+        GLOVE_DIM
+    )
+    for tokens in val_tokens
+])
+
+X_test_glove = np.vstack([
+    document_vector_glove(
+        tokens,
+        glove_embeddings,
+        GLOVE_DIM
+    )
+    for tokens in test_tokens
+])
+
+print(
+    "Training:",
+    X_train_glove.shape
+)
+
+print(
+    "Validation:",
+    X_val_glove.shape
+)
+
+print(
+    "Test:",
+    X_test_glove.shape
+)
+
+glove_lr_config_1 = {
+    "C": 0.5,
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+glove_lr_1 = LogisticRegression(
+    **glove_lr_config_1
+)
+
+print(
+    "Training GloVe Logistic Regression 1..."
+)
+
+glove_lr_1.fit(
+    X_train_glove,
+    y_train
+)
+
+glove_pred_1 = glove_lr_1.predict(
+    X_val_glove
+)
+
+glove_result_1 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="GloVe",
+    y_true=y_val,
+    y_pred=glove_pred_1,
+    split="validation",
+    configuration="GLOVE-LR-1"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="GloVe",
+    configuration="GLOVE-LR-1",
+    hyperparameters=glove_lr_config_1,
+    validation_accuracy=glove_result_1["accuracy"],
+    validation_macro_f1=glove_result_1["macro_f1"]
+)
+
+glove_lr_config_2 = {
+    "C": 1.0,
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+glove_lr_2 = LogisticRegression(
+    **glove_lr_config_2
+)
+
+print(
+    "Training GloVe Logistic Regression 2..."
+)
+
+glove_lr_2.fit(
+    X_train_glove,
+    y_train
+)
+
+glove_pred_2 = glove_lr_2.predict(
+    X_val_glove
+)
+
+glove_result_2 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="GloVe",
+    y_true=y_val,
+    y_pred=glove_pred_2,
+    split="validation",
+    configuration="GLOVE-LR-2"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="GloVe",
+    configuration="GLOVE-LR-2",
+    hyperparameters=glove_lr_config_2,
+    validation_accuracy=glove_result_2["accuracy"],
+    validation_macro_f1=glove_result_2["macro_f1"]
+)
+
+glove_lr_config_3 = {
+    "C": 2.0,
+    "max_iter": 1000,
+    "class_weight": "balanced"
+}
+
+glove_lr_3 = LogisticRegression(
+    **glove_lr_config_3
+)
+
+print(
+    "Training GloVe Logistic Regression 3..."
+)
+
+glove_lr_3.fit(
+    X_train_glove,
+    y_train
+)
+
+glove_pred_3 = glove_lr_3.predict(
+    X_val_glove
+)
+
+glove_result_3 = evaluate_model(
+    model_name="Logistic Regression",
+    representation="GloVe",
+    y_true=y_val,
+    y_pred=glove_pred_3,
+    split="validation",
+    configuration="GLOVE-LR-3"
+)
+
+record_tuning_result(
+    model="Logistic Regression",
+    representation="GloVe",
+    configuration="GLOVE-LR-3",
+    hyperparameters=glove_lr_config_3,
+    validation_accuracy=glove_result_3["accuracy"],
+    validation_macro_f1=glove_result_3["macro_f1"]
+)
+
+glove_results = (
+    pd.DataFrame(tuning_results)
+    .query("representation == 'GloVe'")
+    .sort_values(
+        "validation_macro_f1",
+        ascending=False
+    )
+)
+
+print(
+    glove_results.to_string(
+        index=False
+    )
+)
+
+np.save(
+    "X_train_glove.npy",
+    X_train_glove
+)
+
+np.save(
+    "X_val_glove.npy",
+    X_val_glove
+)
+
+np.save(
+    "X_test_glove.npy",
+    X_test_glove
+)
+
+print(
+    "GloVe representations saved."
+)
+
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+
+print("TensorFlow:", tf.__version__)
+
+gpus = tf.config.list_physical_devices("GPU")
+
+print("Available GPUs:", gpus)
+
+if gpus:
+    print("GPU is available.")
+else:
+    print("WARNING: No GPU detected.")
+
+for gpu in gpus:
+    try:
+        tf.config.experimental.set_memory_growth(
+            gpu,
+            True
+        )
+    except:
+        pass
+
+required_variables = [
+    "X_train_pad",
+    "X_val_pad",
+    "X_test_pad",
+    "y_train",
+    "y_val",
+    "y_test",
+    "embedding_matrix",
+    "class_weights"
+]
+
+for variable in required_variables:
+    print(
+        variable,
+        "->",
+        "OK" if variable in globals() else "MISSING"
+    )
+
+print("y_train:", y_train.shape)
+print("y_val:", y_val.shape)
+print("y_test:", y_test.shape)
+
+print("\nUnique labels:")
+print(np.unique(y_train))
+
+print("\nClass weights:")
+for class_id, weight in class_weights.items():
+    print(
+        f"{class_id}: {weight:.4f}"
+    )
+
+from sklearn.metrics import f1_score
+from tensorflow.keras.callbacks import Callback
+
+
+class ValidationMacroF1(Callback):
+
+    def __init__(
+        self,
+        validation_data
+    ):
+        super().__init__()
+
+        self.X_val = validation_data[0]
+        self.y_val = validation_data[1]
+
+        self.macro_f1s = []
+
+    def on_epoch_end(
+        self,
+        epoch,
+        logs=None
+    ):
+
+        y_prob = self.model.predict(
+            self.X_val,
+            batch_size=256,
+            verbose=0
+        )
+
+        y_pred = np.argmax(
+            y_prob,
+            axis=1
+        )
+
+        macro_f1 = f1_score(
+            self.y_val,
+            y_pred,
+            average="macro",
+            zero_division=0
+        )
+
+        self.macro_f1s.append(
+            macro_f1
+        )
+
+        print(
+            f" - val_macro_f1: {macro_f1:.4f}"
+        )
+
+from tensorflow.keras.callbacks import Callback
+from sklearn.metrics import f1_score
+import numpy as np
+
+
+class MacroF1Checkpoint(Callback):
+
+    def __init__(
+        self,
+        X_val,
+        y_val,
+        filepath,
+        batch_size=256
+    ):
+        super().__init__()
+
+        self.X_val = X_val
+        self.y_val = y_val
+        self.filepath = filepath
+        self.batch_size = batch_size
+
+        self.best_macro_f1 = -np.inf
+        self.best_epoch = None
+
+        self.history_macro_f1 = []
+
+    def on_epoch_end(self, epoch, logs=None):
+
+        y_prob = self.model.predict(
+            self.X_val,
+            batch_size=self.batch_size,
+            verbose=0
+        )
+
+        y_pred = np.argmax(
+            y_prob,
+            axis=1
+        )
+
+        macro_f1 = f1_score(
+            self.y_val,
+            y_pred,
+            average="macro",
+            zero_division=0
+        )
+
+        self.history_macro_f1.append(
+            macro_f1
+        )
+
+        if macro_f1 > self.best_macro_f1:
+
+            self.best_macro_f1 = macro_f1
+            self.best_epoch = epoch + 1
+
+            self.model.save(
+                self.filepath
+            )
+
+            print(
+                f" - val_macro_f1: {macro_f1:.4f} "
+                f"*** BEST ***"
+            )
+
+        else:
+
+            print(
+                f" - val_macro_f1: {macro_f1:.4f}"
+            )
+
+from tensorflow.keras.callbacks import (
+    EarlyStopping,
+    ReduceLROnPlateau,
+    ModelCheckpoint
+)
+
+def create_callbacks(
+    model_name
+):
+
+    checkpoint_path = (
+        f"{model_name}_best.keras"
+    )
+
+    callbacks = [
+
+        ValidationMacroF1(
+            (
+                X_val_pad,
+                y_val
+            )
+        ),
+
+        EarlyStopping(
+            monitor="val_loss",
+            patience=2,
+            restore_best_weights=True,
+            verbose=1
+        ),
+
+        ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=1,
+            min_lr=1e-6,
+            verbose=1
+        ),
+
+        ModelCheckpoint(
+            checkpoint_path,
+            monitor="val_loss",
+            save_best_only=True,
+            verbose=1
+        )
+    ]
+
+    return callbacks
+
+from tensorflow.keras.callbacks import (
+    EarlyStopping,
+    ReduceLROnPlateau
+)
+
+
+def create_macro_f1_callbacks(
+    model_name
+):
+
+    checkpoint_path = (
+        f"{model_name}_best.keras"
+    )
+
+    macro_f1_checkpoint = MacroF1Checkpoint(
+        X_val_pad,
+        y_val,
+        checkpoint_path
+    )
+
+    callbacks = [
+
+        macro_f1_checkpoint,
+
+        ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=1,
+            min_lr=1e-6,
+            verbose=1
+        ),
+
+        EarlyStopping(
+            monitor="val_loss",
+            patience=2,
+            restore_best_weights=False,
+            verbose=1
+        )
+    ]
+
+    return callbacks, macro_f1_checkpoint
+
+from tensorflow.keras.layers import Embedding
+
+def create_word2vec_embedding():
+
+    return Embedding(
+        input_dim=MAX_VOCAB_SIZE + 1,
+        output_dim=EMBEDDING_DIM,
+        weights=[embedding_matrix],
+        input_length=MAX_SEQUENCE_LENGTH,
+        trainable=False,
+        mask_zero=True
+    )
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import (
+    Dense,
+    Dropout,
+    SimpleRNN,
+    GRU,
+    LSTM,
+    Bidirectional
+)
+
+
+def build_rnn_model(
+    architecture,
+    units=128,
+    dropout=0.3
+):
+
+    model = Sequential(
+        name=architecture
+    )
+
+    model.add(
+        create_word2vec_embedding()
+    )
+
+    if architecture == "SimpleRNN":
+
+        model.add(
+            SimpleRNN(
+                units,
+                dropout=dropout,
+                recurrent_dropout=0.0
+            )
+        )
+
+    elif architecture == "GRU":
+
+        model.add(
+            GRU(
+                units,
+                dropout=dropout,
+                recurrent_dropout=0.0
+            )
+        )
+
+    elif architecture == "LSTM":
+
+        model.add(
+            LSTM(
+                units,
+                dropout=dropout,
+                recurrent_dropout=0.0
+            )
+        )
+
+    elif architecture == "BiSimpleRNN":
+
+        model.add(
+            Bidirectional(
+                SimpleRNN(
+                    units,
+                    dropout=dropout
+                )
+            )
+        )
+
+    elif architecture == "BiGRU":
+
+        model.add(
+            Bidirectional(
+                GRU(
+                    units,
+                    dropout=dropout
+                )
+            )
+        )
+
+    elif architecture == "BiLSTM":
+
+        model.add(
+            Bidirectional(
+                LSTM(
+                    units,
+                    dropout=dropout
+                )
+            )
+        )
+
+    else:
+
+        raise ValueError(
+            f"Unknown architecture: {architecture}"
+        )
+
+    model.add(
+        Dense(
+            64,
+            activation="relu"
+        )
+    )
+
+    model.add(
+        Dropout(dropout)
+    )
+
+    model.add(
+        Dense(
+            8,
+            activation="softmax"
+        )
+    )
+
+    return model
+
+from tensorflow.keras.optimizers import Adam
+
+
+def compile_rnn_model(
+    model,
+    learning_rate=0.001
+):
+
+    model.compile(
+
+        optimizer=Adam(
+            learning_rate=learning_rate
+        ),
+
+        loss="sparse_categorical_crossentropy",
+
+        metrics=[
+            "accuracy"
+        ]
+    )
+
+    return model
+
+tf.keras.backend.clear_session()
+
+gru_1 = build_rnn_model(
+    architecture="GRU",
+    units=128,
+    dropout=0.30
+)
+
+gru_1 = compile_rnn_model(
+    gru_1,
+    learning_rate=0.001
+)
+
+gru_callbacks_1, gru_f1_callback_1 = create_macro_f1_callbacks(
+    "GRU_W2V_1"
+)
+
+print("=" * 60)
+print("Training GRU Configuration 1")
+print("=" * 60)
+
+history_gru_1 = gru_1.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=gru_callbacks_1,
+    verbose=1
+)
+
+gru_1_best = tf.keras.models.load_model(
+    "GRU_W2V_1_best.keras"
+)
+
+gru_1_prob = gru_1_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+gru_1_pred = np.argmax(
+    gru_1_prob,
+    axis=1
+)
+
+gru_result_1 = evaluate_model(
+    model_name="GRU",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=gru_1_pred,
+    split="validation",
+    configuration="W2V-GRU-1"
+)
+
+record_tuning_result(
+    model="GRU",
+    representation="Word2Vec",
+    configuration="W2V-GRU-1",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.30,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=gru_result_1["accuracy"],
+    validation_macro_f1=gru_result_1["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+gru_2 = build_rnn_model(
+    architecture="GRU",
+    units=128,
+    dropout=0.50
+)
+
+gru_2 = compile_rnn_model(
+    gru_2,
+    learning_rate=0.001
+)
+
+gru_callbacks_2, gru_f1_callback_2 = create_macro_f1_callbacks(
+    "GRU_W2V_2"
+)
+
+print("=" * 60)
+print("Training GRU Configuration 2")
+print("=" * 60)
+
+history_gru_2 = gru_2.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=gru_callbacks_2,
+    verbose=1
+)
+
+gru_2_best = tf.keras.models.load_model(
+    "GRU_W2V_2_best.keras"
+)
+
+gru_2_prob = gru_2_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+gru_2_pred = np.argmax(
+    gru_2_prob,
+    axis=1
+)
+
+gru_result_2 = evaluate_model(
+    model_name="GRU",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=gru_2_pred,
+    split="validation",
+    configuration="W2V-GRU-2"
+)
+
+record_tuning_result(
+    model="GRU",
+    representation="Word2Vec",
+    configuration="W2V-GRU-2",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.50,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=gru_result_2["accuracy"],
+    validation_macro_f1=gru_result_2["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+gru_3 = build_rnn_model(
+    architecture="GRU",
+    units=256,
+    dropout=0.30
+)
+
+gru_3 = compile_rnn_model(
+    gru_3,
+    learning_rate=0.0005
+)
+
+gru_callbacks_3, gru_f1_callback_3 = create_macro_f1_callbacks(
+    "GRU_W2V_3"
+)
+
+print("=" * 60)
+print("Training GRU Configuration 3")
+print("=" * 60)
+
+history_gru_3 = gru_3.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=gru_callbacks_3,
+    verbose=1
+)
+
+gru_3_best = tf.keras.models.load_model(
+    "GRU_W2V_3_best.keras"
+)
+
+gru_3_prob = gru_3_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+gru_3_pred = np.argmax(
+    gru_3_prob,
+    axis=1
+)
+
+gru_result_3 = evaluate_model(
+    model_name="GRU",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=gru_3_pred,
+    split="validation",
+    configuration="W2V-GRU-3"
+)
+
+record_tuning_result(
+    model="GRU",
+    representation="Word2Vec",
+    configuration="W2V-GRU-3",
+    hyperparameters={
+        "units": 256,
+        "dropout": 0.30,
+        "learning_rate": 0.0005,
+        "batch_size": 128
+    },
+    validation_accuracy=gru_result_3["accuracy"],
+    validation_macro_f1=gru_result_3["macro_f1"]
+)
+
+tuning_df = pd.DataFrame(tuning_results)
+
+gru_results = tuning_df[
+    tuning_df["model"] == "GRU"
+].sort_values(
+    "validation_macro_f1",
+    ascending=False
+).copy()
+
+print("=" * 60)
+print("GRU CONFIGURATION RESULTS")
+print("=" * 60)
+
+print(gru_results.to_string(index=False))
+
+best_gru_config = gru_results.iloc[0]
+
+print("\n" + "=" * 60)
+print("BEST GRU CONFIGURATION")
+print("=" * 60)
+
+print(best_gru_config.to_string())
+
+tf.keras.backend.clear_session()
+
+simple_rnn_1 = build_rnn_model(
+    architecture="SimpleRNN",
+    units=128,
+    dropout=0.30
+)
+
+simple_rnn_1 = compile_rnn_model(
+    simple_rnn_1,
+    learning_rate=0.001
+)
+
+simple_rnn_callbacks_1, simple_rnn_f1_callback_1 = create_macro_f1_callbacks(
+    "SimpleRNN_W2V_1"
+)
+
+print("=" * 60)
+print("Training SimpleRNN Configuration 1")
+print("=" * 60)
+
+history_simple_rnn_1 = simple_rnn_1.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=simple_rnn_callbacks_1,
+    verbose=1
+)
+
+simple_rnn_1_best = tf.keras.models.load_model(
+    "SimpleRNN_W2V_1_best.keras"
+)
+
+simple_rnn_1_prob = simple_rnn_1_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+simple_rnn_1_pred = np.argmax(
+    simple_rnn_1_prob,
+    axis=1
+)
+
+simple_rnn_result_1 = evaluate_model(
+    model_name="SimpleRNN",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=simple_rnn_1_pred,
+    split="validation",
+    configuration="W2V-SimpleRNN-1"
+)
+
+record_tuning_result(
+    model="SimpleRNN",
+    representation="Word2Vec",
+    configuration="W2V-SimpleRNN-1",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.30,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=simple_rnn_result_1["accuracy"],
+    validation_macro_f1=simple_rnn_result_1["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+simple_rnn_2 = build_rnn_model(
+    architecture="SimpleRNN",
+    units=128,
+    dropout=0.50
+)
+
+simple_rnn_2 = compile_rnn_model(
+    simple_rnn_2,
+    learning_rate=0.001
+)
+
+simple_rnn_callbacks_2, simple_rnn_f1_callback_2 = create_macro_f1_callbacks(
+    "SimpleRNN_W2V_2"
+)
+
+print("=" * 60)
+print("Training SimpleRNN Configuration 2")
+print("=" * 60)
+
+history_simple_rnn_2 = simple_rnn_2.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=simple_rnn_callbacks_2,
+    verbose=1
+)
+
+simple_rnn_2_best = tf.keras.models.load_model(
+    "SimpleRNN_W2V_2_best.keras"
+)
+
+simple_rnn_2_prob = simple_rnn_2_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+simple_rnn_2_pred = np.argmax(
+    simple_rnn_2_prob,
+    axis=1
+)
+
+simple_rnn_result_2 = evaluate_model(
+    model_name="SimpleRNN",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=simple_rnn_2_pred,
+    split="validation",
+    configuration="W2V-SimpleRNN-2"
+)
+
+record_tuning_result(
+    model="SimpleRNN",
+    representation="Word2Vec",
+    configuration="W2V-SimpleRNN-2",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.50,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=simple_rnn_result_2["accuracy"],
+    validation_macro_f1=simple_rnn_result_2["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+simple_rnn_3 = build_rnn_model(
+    architecture="SimpleRNN",
+    units=256,
+    dropout=0.30
+)
+
+simple_rnn_3 = compile_rnn_model(
+    simple_rnn_3,
+    learning_rate=0.0005
+)
+
+simple_rnn_callbacks_3, simple_rnn_f1_callback_3 = create_macro_f1_callbacks(
+    "SimpleRNN_W2V_3"
+)
+
+print("=" * 60)
+print("Training SimpleRNN Configuration 3")
+print("=" * 60)
+
+history_simple_rnn_3 = simple_rnn_3.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=simple_rnn_callbacks_3,
+    verbose=1
+)
+
+simple_rnn_3_best = tf.keras.models.load_model(
+    "SimpleRNN_W2V_3_best.keras"
+)
+
+simple_rnn_3_prob = simple_rnn_3_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+simple_rnn_3_pred = np.argmax(
+    simple_rnn_3_prob,
+    axis=1
+)
+
+simple_rnn_result_3 = evaluate_model(
+    model_name="SimpleRNN",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=simple_rnn_3_pred,
+    split="validation",
+    configuration="W2V-SimpleRNN-3"
+)
+
+record_tuning_result(
+    model="SimpleRNN",
+    representation="Word2Vec",
+    configuration="W2V-SimpleRNN-3",
+    hyperparameters={
+        "units": 256,
+        "dropout": 0.30,
+        "learning_rate": 0.0005,
+        "batch_size": 128
+    },
+    validation_accuracy=simple_rnn_result_3["accuracy"],
+    validation_macro_f1=simple_rnn_result_3["macro_f1"]
+)
+
+tuning_df = pd.DataFrame(tuning_results)
+
+simple_rnn_results = tuning_df[
+    tuning_df["model"] == "SimpleRNN"
+].sort_values(
+    "validation_macro_f1",
+    ascending=False
+).copy()
+
+
+print("=" * 60)
+print("SimpleRNN CONFIGURATION RESULTS")
+print("=" * 60)
+
+print(
+    simple_rnn_results.to_string(index=False)
+)
+
+
+best_simple_rnn_config = simple_rnn_results.iloc[0]
+
+print("\n" + "=" * 60)
+print("BEST SimpleRNN CONFIGURATION")
+print("=" * 60)
+
+print(best_simple_rnn_config.to_string())
+
+tf.keras.backend.clear_session()
+
+lstm_1 = build_rnn_model(
+    architecture="LSTM",
+    units=128,
+    dropout=0.30
+)
+
+lstm_1 = compile_rnn_model(
+    lstm_1,
+    learning_rate=0.001
+)
+
+lstm_callbacks_1, lstm_f1_callback_1 = create_macro_f1_callbacks(
+    "LSTM_W2V_1"
+)
+
+print("=" * 60)
+print("Training LSTM Configuration 1")
+print("=" * 60)
+
+history_lstm_1 = lstm_1.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=lstm_callbacks_1,
+    verbose=1
+)
+
+lstm_1_best = tf.keras.models.load_model(
+    "LSTM_W2V_1_best.keras"
+)
+
+lstm_1_prob = lstm_1_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+lstm_1_pred = np.argmax(
+    lstm_1_prob,
+    axis=1
+)
+
+lstm_result_1 = evaluate_model(
+    model_name="LSTM",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=lstm_1_pred,
+    split="validation",
+    configuration="W2V-LSTM-1"
+)
+
+record_tuning_result(
+    model="LSTM",
+    representation="Word2Vec",
+    configuration="W2V-LSTM-1",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.30,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=lstm_result_1["accuracy"],
+    validation_macro_f1=lstm_result_1["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+lstm_2 = build_rnn_model(
+    architecture="LSTM",
+    units=128,
+    dropout=0.50
+)
+
+lstm_2 = compile_rnn_model(
+    lstm_2,
+    learning_rate=0.001
+)
+
+lstm_callbacks_2, lstm_f1_callback_2 = create_macro_f1_callbacks(
+    "LSTM_W2V_2"
+)
+
+print("=" * 60)
+print("Training LSTM Configuration 2")
+print("=" * 60)
+
+history_lstm_2 = lstm_2.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=lstm_callbacks_2,
+    verbose=1
+)
+
+lstm_2_best = tf.keras.models.load_model(
+    "LSTM_W2V_2_best.keras"
+)
+
+lstm_2_prob = lstm_2_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+lstm_2_pred = np.argmax(
+    lstm_2_prob,
+    axis=1
+)
+
+lstm_result_2 = evaluate_model(
+    model_name="LSTM",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=lstm_2_pred,
+    split="validation",
+    configuration="W2V-LSTM-2"
+)
+
+record_tuning_result(
+    model="LSTM",
+    representation="Word2Vec",
+    configuration="W2V-LSTM-2",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.50,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=lstm_result_2["accuracy"],
+    validation_macro_f1=lstm_result_2["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+lstm_3 = build_rnn_model(
+    architecture="LSTM",
+    units=256,
+    dropout=0.30
+)
+
+lstm_3 = compile_rnn_model(
+    lstm_3,
+    learning_rate=0.0005
+)
+
+lstm_callbacks_3, lstm_f1_callback_3 = create_macro_f1_callbacks(
+    "LSTM_W2V_3"
+)
+
+print("=" * 60)
+print("Training LSTM Configuration 3")
+print("=" * 60)
+
+history_lstm_3 = lstm_3.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=lstm_callbacks_3,
+    verbose=1
+)
+
+lstm_3_best = tf.keras.models.load_model(
+    "LSTM_W2V_3_best.keras"
+)
+
+lstm_3_prob = lstm_3_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+lstm_3_pred = np.argmax(
+    lstm_3_prob,
+    axis=1
+)
+
+lstm_result_3 = evaluate_model(
+    model_name="LSTM",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=lstm_3_pred,
+    split="validation",
+    configuration="W2V-LSTM-3"
+)
+
+record_tuning_result(
+    model="LSTM",
+    representation="Word2Vec",
+    configuration="W2V-LSTM-3",
+    hyperparameters={
+        "units": 256,
+        "dropout": 0.30,
+        "learning_rate": 0.0005,
+        "batch_size": 128
+    },
+    validation_accuracy=lstm_result_3["accuracy"],
+    validation_macro_f1=lstm_result_3["macro_f1"]
+)
+
+tuning_df = pd.DataFrame(tuning_results)
+
+lstm_results = tuning_df[
+    tuning_df["model"] == "LSTM"
+].sort_values(
+    "validation_macro_f1",
+    ascending=False
+).copy()
+
+print("=" * 60)
+print("LSTM CONFIGURATION RESULTS")
+print("=" * 60)
+
+print(lstm_results.to_string(index=False))
+
+best_lstm_config = lstm_results.iloc[0]
+
+print("\n" + "=" * 60)
+print("BEST LSTM CONFIGURATION")
+print("=" * 60)
+
+print(best_lstm_config.to_string())
+
+tf.keras.backend.clear_session()
+
+bigru_1 = build_rnn_model(
+    architecture="BiGRU",
+    units=128,
+    dropout=0.30
+)
+
+bigru_1 = compile_rnn_model(
+    bigru_1,
+    learning_rate=0.001
+)
+
+bigru_callbacks_1, bigru_f1_callback_1 = create_macro_f1_callbacks(
+    "BiGRU_W2V_1"
+)
+
+print("=" * 60)
+print("Training Bidirectional GRU Configuration 1")
+print("=" * 60)
+
+history_bigru_1 = bigru_1.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=bigru_callbacks_1,
+    verbose=1
+)
+
+bigru_1_best = tf.keras.models.load_model(
+    "BiGRU_W2V_1_best.keras"
+)
+
+bigru_1_prob = bigru_1_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+bigru_1_pred = np.argmax(
+    bigru_1_prob,
+    axis=1
+)
+
+bigru_result_1 = evaluate_model(
+    model_name="BiGRU",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=bigru_1_pred,
+    split="validation",
+    configuration="W2V-BiGRU-1"
+)
+
+record_tuning_result(
+    model="BiGRU",
+    representation="Word2Vec",
+    configuration="W2V-BiGRU-1",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.30,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=bigru_result_1["accuracy"],
+    validation_macro_f1=bigru_result_1["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+bigru_2 = build_rnn_model(
+    architecture="BiGRU",
+    units=128,
+    dropout=0.50
+)
+
+bigru_2 = compile_rnn_model(
+    bigru_2,
+    learning_rate=0.001
+)
+
+bigru_callbacks_2, bigru_f1_callback_2 = create_macro_f1_callbacks(
+    "BiGRU_W2V_2"
+)
+
+print("=" * 60)
+print("Training Bidirectional GRU Configuration 2")
+print("=" * 60)
+
+history_bigru_2 = bigru_2.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=bigru_callbacks_2,
+    verbose=1
+)
+
+bigru_2_best = tf.keras.models.load_model(
+    "BiGRU_W2V_2_best.keras"
+)
+
+bigru_2_prob = bigru_2_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+bigru_2_pred = np.argmax(
+    bigru_2_prob,
+    axis=1
+)
+
+bigru_result_2 = evaluate_model(
+    model_name="BiGRU",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=bigru_2_pred,
+    split="validation",
+    configuration="W2V-BiGRU-2"
+)
+
+record_tuning_result(
+    model="BiGRU",
+    representation="Word2Vec",
+    configuration="W2V-BiGRU-2",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.50,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=bigru_result_2["accuracy"],
+    validation_macro_f1=bigru_result_2["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+bigru_3 = build_rnn_model(
+    architecture="BiGRU",
+    units=256,
+    dropout=0.30
+)
+
+bigru_3 = compile_rnn_model(
+    bigru_3,
+    learning_rate=0.0005
+)
+
+bigru_callbacks_3, bigru_f1_callback_3 = create_macro_f1_callbacks(
+    "BiGRU_W2V_3"
+)
+
+print("=" * 60)
+print("Training Bidirectional GRU Configuration 3")
+print("=" * 60)
+
+history_bigru_3 = bigru_3.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=bigru_callbacks_3,
+    verbose=1
+)
+
+bigru_3_best = tf.keras.models.load_model(
+    "BiGRU_W2V_3_best.keras"
+)
+
+bigru_3_prob = bigru_3_best.predict(
+    X_val_pad,
+    batch_size=128,
+    verbose=1
+)
+
+bigru_3_pred = np.argmax(
+    bigru_3_prob,
+    axis=1
+)
+
+bigru_result_3 = evaluate_model(
+    model_name="BiGRU",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=bigru_3_pred,
+    split="validation",
+    configuration="W2V-BiGRU-3"
+)
+
+record_tuning_result(
+    model="BiGRU",
+    representation="Word2Vec",
+    configuration="W2V-BiGRU-3",
+    hyperparameters={
+        "units": 256,
+        "dropout": 0.30,
+        "learning_rate": 0.0005,
+        "batch_size": 128
+    },
+    validation_accuracy=bigru_result_3["accuracy"],
+    validation_macro_f1=bigru_result_3["macro_f1"]
+)
+
+tuning_df = pd.DataFrame(tuning_results)
+
+bidir_gru_results = tuning_df[
+    tuning_df["model"] == "BiGRU"
+].sort_values(
+    "validation_macro_f1",
+    ascending=False
+).copy()
+
+print("=" * 60)
+print("Bidirectional GRU CONFIGURATION RESULTS")
+print("=" * 60)
+
+print(bidir_gru_results.to_string(index=False))
+
+best_bidir_gru_config = bidir_gru_results.iloc[0]
+
+print("\n" + "=" * 60)
+print("BEST Bidirectional GRU CONFIGURATION")
+print("=" * 60)
+
+print(best_bidir_gru_config.to_string())
+
+tf.keras.backend.clear_session()
+
+birnn_1 = build_rnn_model(
+    architecture="BiSimpleRNN",
+    units=128,
+    dropout=0.30
+)
+
+birnn_1 = compile_rnn_model(
+    birnn_1,
+    learning_rate=0.001
+)
+
+birnn_callbacks_1, birnn_f1_callback_1 = create_macro_f1_callbacks(
+    "BiSimpleRNN_W2V_1"
+)
+
+print("=" * 60)
+print("Training Bidirectional SimpleRNN Configuration 1")
+print("=" * 60)
+
+history_birnn_1 = birnn_1.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=birnn_callbacks_1,
+    verbose=1
+)
+
+birnn_1_best = tf.keras.models.load_model(
+    "BiSimpleRNN_W2V_1_best.keras"
+)
+
+birnn_1_prob = birnn_1_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+birnn_1_pred = np.argmax(
+    birnn_1_prob,
+    axis=1
+)
+
+birnn_result_1 = evaluate_model(
+    model_name="BiSimpleRNN",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=birnn_1_pred,
+    split="validation",
+    configuration="W2V-BiSimpleRNN-1"
+)
+
+record_tuning_result(
+    model="BiSimpleRNN",
+    representation="Word2Vec",
+    configuration="W2V-BiSimpleRNN-1",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.30,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=birnn_result_1["accuracy"],
+    validation_macro_f1=birnn_result_1["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+birnn_2 = build_rnn_model(
+    architecture="BiSimpleRNN",
+    units=128,
+    dropout=0.50
+)
+
+birnn_2 = compile_rnn_model(
+    birnn_2,
+    learning_rate=0.001
+)
+
+birnn_callbacks_2, birnn_f1_callback_2 = create_macro_f1_callbacks(
+    "BiSimpleRNN_W2V_2"
+)
+
+print("=" * 60)
+print("Training Bidirectional SimpleRNN Configuration 2")
+print("=" * 60)
+
+history_birnn_2 = birnn_2.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=birnn_callbacks_2,
+    verbose=1
+)
+
+birnn_2_best = tf.keras.models.load_model(
+    "BiSimpleRNN_W2V_2_best.keras"
+)
+
+birnn_2_prob = birnn_2_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+birnn_2_pred = np.argmax(
+    birnn_2_prob,
+    axis=1
+)
+
+birnn_result_2 = evaluate_model(
+    model_name="BiSimpleRNN",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=birnn_2_pred,
+    split="validation",
+    configuration="W2V-BiSimpleRNN-2"
+)
+
+record_tuning_result(
+    model="BiSimpleRNN",
+    representation="Word2Vec",
+    configuration="W2V-BiSimpleRNN-2",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.50,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=birnn_result_2["accuracy"],
+    validation_macro_f1=birnn_result_2["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+birnn_3 = build_rnn_model(
+    architecture="BiSimpleRNN",
+    units=256,
+    dropout=0.30
+)
+
+birnn_3 = compile_rnn_model(
+    birnn_3,
+    learning_rate=0.0005
+)
+
+birnn_callbacks_3, birnn_f1_callback_3 = create_macro_f1_callbacks(
+    "BiSimpleRNN_W2V_3"
+)
+
+print("=" * 60)
+print("Training Bidirectional SimpleRNN Configuration 3")
+print("=" * 60)
+
+history_birnn_3 = birnn_3.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=birnn_callbacks_3,
+    verbose=1
+)
+
+birnn_3_best = tf.keras.models.load_model(
+    "BiSimpleRNN_W2V_3_best.keras"
+)
+
+birnn_3_prob = birnn_3_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+birnn_3_pred = np.argmax(
+    birnn_3_prob,
+    axis=1
+)
+
+birnn_result_3 = evaluate_model(
+    model_name="BiSimpleRNN",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=birnn_3_pred,
+    split="validation",
+    configuration="W2V-BiSimpleRNN-3"
+)
+
+record_tuning_result(
+    model="BiSimpleRNN",
+    representation="Word2Vec",
+    configuration="W2V-BiSimpleRNN-3",
+    hyperparameters={
+        "units": 256,
+        "dropout": 0.30,
+        "learning_rate": 0.0005,
+        "batch_size": 128
+    },
+    validation_accuracy=birnn_result_3["accuracy"],
+    validation_macro_f1=birnn_result_3["macro_f1"]
+)
+
+tuning_df = pd.DataFrame(tuning_results)
+
+bidir_rnn_results = tuning_df[
+    tuning_df["model"] == "BiSimpleRNN"
+].sort_values(
+    "validation_macro_f1",
+    ascending=False
+).copy()
+
+print("=" * 60)
+print("Bidirectional SimpleRNN CONFIGURATION RESULTS")
+print("=" * 60)
+
+print(bidir_rnn_results.to_string(index=False))
+
+best_bidir_rnn_config = bidir_rnn_results.iloc[0]
+
+print("\n" + "=" * 60)
+print("BEST Bidirectional SimpleRNN CONFIGURATION")
+print("=" * 60)
+
+print(best_bidir_rnn_config.to_string())
+
+tf.keras.backend.clear_session()
+
+bilstm_1 = build_rnn_model(
+    architecture="BiLSTM",
+    units=128,
+    dropout=0.30
+)
+
+bilstm_1 = compile_rnn_model(
+    bilstm_1,
+    learning_rate=0.001
+)
+
+bilstm_callbacks_1, bilstm_f1_callback_1 = create_macro_f1_callbacks(
+    "BiLSTM_W2V_1"
+)
+
+print("=" * 60)
+print("Training Bidirectional SiLSTM Configuration 1")
+print("=" * 60)
+
+history_bilstm_1 = bilstm_1.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=bilstm_callbacks_1,
+    verbose=1
+)
+
+bilstm_1_best = tf.keras.models.load_model(
+    "BiLSTM_W2V_1_best.keras"
+)
+
+bilstm_1_prob = bilstm_1_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+bilstm_1_pred = np.argmax(
+    bilstm_1_prob,
+    axis=1
+)
+
+bilstm_result_1 = evaluate_model(
+    model_name="BiLSTM",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=bilstm_1_pred,
+    split="validation",
+    configuration="W2V-BiLSTM-1"
+)
+
+record_tuning_result(
+    model="BiLSTM",
+    representation="Word2Vec",
+    configuration="W2V-BiLSTM-1",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.30,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=bilstm_result_1["accuracy"],
+    validation_macro_f1=bilstm_result_1["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+bilstm_2 = build_rnn_model(
+    architecture="BiLSTM",
+    units=128,
+    dropout=0.50
+)
+
+bilstm_2 = compile_rnn_model(
+    bilstm_2,
+    learning_rate=0.001
+)
+
+bilstm_callbacks_2, bilstm_f1_callback_2 = create_macro_f1_callbacks(
+    "BiLSTM_W2V_2"
+)
+
+print("=" * 60)
+print("Training Bidirectional SiLSTM Configuration 2")
+print("=" * 60)
+
+history_bilstm_2 = bilstm_2.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=bilstm_callbacks_2,
+    verbose=1
+)
+
+bilstm_2_best = tf.keras.models.load_model(
+    "BiLSTM_W2V_2_best.keras"
+)
+
+bilstm_2_prob = bilstm_2_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+bilstm_2_pred = np.argmax(
+    bilstm_2_prob,
+    axis=1
+)
+
+bilstm_result_2 = evaluate_model(
+    model_name="BiLSTM",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=bilstm_2_pred,
+    split="validation",
+    configuration="W2V-BiLSTM-2"
+)
+
+record_tuning_result(
+    model="BiLSTM",
+    representation="Word2Vec",
+    configuration="W2V-BiLSTM-2",
+    hyperparameters={
+        "units": 128,
+        "dropout": 0.20,
+        "learning_rate": 0.001,
+        "batch_size": 128
+    },
+    validation_accuracy=bilstm_result_2["accuracy"],
+    validation_macro_f1=bilstm_result_2["macro_f1"]
+)
+
+tf.keras.backend.clear_session()
+
+bilstm_3 = build_rnn_model(
+    architecture="BiLSTM",
+    units=256,
+    dropout=0.30
+)
+
+bilstm_3 = compile_rnn_model(
+    bilstm_3,
+    learning_rate=0.0005
+)
+
+bilstm_callbacks_3, bilstm_f1_callback_3 = create_macro_f1_callbacks(
+    "BiLSTM_W2V_3"
+)
+
+print("=" * 60)
+print("Training Bidirectional SiLSTM Configuration 3")
+print("=" * 60)
+
+history_bilstm_3 = bilstm_3.fit(
+    X_train_pad,
+    y_train,
+    validation_data=(
+        X_val_pad,
+        y_val
+    ),
+    epochs=10,
+    batch_size=128,
+    class_weight=class_weights,
+    callbacks=bilstm_callbacks_3,
+    verbose=1
+)
+
+bilstm_3_best = tf.keras.models.load_model(
+    "BiLSTM_W2V_3_best.keras"
+)
+
+bilstm_3_prob = bilstm_3_best.predict(
+    X_val_pad,
+    batch_size=256,
+    verbose=1
+)
+
+bilstm_3_pred = np.argmax(
+    bilstm_3_prob,
+    axis=1
+)
+
+bilstm_result_3 = evaluate_model(
+    model_name="BiLSTM",
+    representation="Word2Vec",
+    y_true=y_val,
+    y_pred=bilstm_3_pred,
+    split="validation",
+    configuration="W2V-BiLSTM-3"
+)
+
+record_tuning_result(
+    model="BiLSTM",
+    representation="Word2Vec",
+    configuration="W2V-BiLSTM-3",
+    hyperparameters={
+        "units": 256,
+        "dropout": 0.30,
+        "learning_rate": 0.0005,
+        "batch_size": 128
+    },
+    validation_accuracy=bilstm_result_3["accuracy"],
+    validation_macro_f1=bilstm_result_3["macro_f1"]
+)
+
+tuning_df = pd.DataFrame(tuning_results)
+
+bidir_lstm_results = tuning_df[
+    tuning_df["model"] == "BiLSTM"
+].sort_values(
+    "validation_macro_f1",
+    ascending=False
+).copy()
+
+print("=" * 60)
+print("Bidirectional LSTM CONFIGURATION RESULTS")
+print("=" * 60)
+
+print(bidir_lstm_results.to_string(index=False))
+
+best_bidir_lstm_config = bidir_lstm_results.iloc[0]
+
+print("\n" + "=" * 60)
+print("BEST Bidirectional LSTM CONFIGURATION")
+print("=" * 60)
+
+print(best_bidir_lstm_config.to_string())
+
+def evaluate_neural_model(
+    model,
+    X_test_data,
+    y_test_data,
+    model_name
+):
+
+    probabilities = model.predict(
+        X_test_data,
+        batch_size=256,
+        verbose=1
+    )
+
+    predictions = np.argmax(
+        probabilities,
+        axis=1
+    )
+
+    accuracy = accuracy_score(
+        y_test_data,
+        predictions
+    )
+
+    macro_f1 = f1_score(
+        y_test_data,
+        predictions,
+        average="macro"
+    )
+
+    weighted_f1 = f1_score(
+        y_test_data,
+        predictions,
+        average="weighted"
+    )
+
+    print("=" * 70)
+    print(
+        f"FINAL TEST: {model_name}"
+    )
+    print("=" * 70)
+
+    print(
+        classification_report(
+            y_test_data,
+            predictions,
+            target_names=class_names,
+            digits=4
+        )
+    )
+
+    plot_confusion_matrix(
+        y_test_data,
+        predictions,
+        f"{model_name} Confusion Matrix"
+    )
+
+    return {
+        "model": model_name,
+        "representation": "Word2Vec",
+        "test_accuracy": accuracy,
+        "test_macro_f1": macro_f1,
+        "test_weighted_f1": weighted_f1,
+        "predictions": predictions,
+        "probabilities": probabilities
+    }
+
+def select_best_rnn_model(
+    model_name,
+    models_dict
+):
+
+    results = []
+
+    for config_name, (
+        model,
+        callback
+    ) in models_dict.items():
+
+        results.append({
+            "Model": model_name,
+            "Configuration": config_name,
+            "Validation Macro F1": callback.best_macro_f1
+        })
+
+    results_df = pd.DataFrame(
+        results
+    ).sort_values(
+        "Validation Macro F1",
+        ascending=False
+    ).reset_index(
+        drop=True
+    )
+
+    print("=" * 70)
+    print(f"{model_name} HYPERPARAMETER TUNING RESULTS")
+    print("=" * 70)
+
+    display(results_df)
+
+    best_config_name = results_df.loc[
+        0,
+        "Configuration"
+    ]
+
+    best_model = models_dict[
+        best_config_name
+    ][0]
+
+    best_validation_f1 = models_dict[
+        best_config_name
+    ][1].best_macro_f1
+
+    print("\nBest Configuration:")
+    print(best_config_name)
+
+    print("\nBest Validation Macro F1:")
+    print(best_validation_f1)
+
+    return (
+        best_model,
+        best_config_name,
+        best_validation_f1,
+        results_df
+    )
+
+simple_rnn_models = {
+
+    "SimpleRNN Config 1": (
+        simple_rnn_1,
+        simple_rnn_f1_callback_1
+    ),
+
+    "SimpleRNN Config 2": (
+        simple_rnn_2,
+        simple_rnn_f1_callback_2
+    ),
+
+    "SimpleRNN Config 3": (
+        simple_rnn_3,
+        simple_rnn_f1_callback_3
+    )
+}
+
+(
+    best_simple_rnn_model,
+    best_simple_rnn_config,
+    best_simple_rnn_val_f1,
+    simple_rnn_tuning_df
+) = select_best_rnn_model(
+    "SimpleRNN",
+    simple_rnn_models
+)
+simple_rnn_final_result = evaluate_neural_model(
+    best_simple_rnn_model,
+    X_test_pad,
+    y_test,
+    f"SimpleRNN ({best_simple_rnn_config})"
+)
+
+gru_models = {
+
+    "GRU Config 1": (
+        gru_1,
+        gru_f1_callback_1
+    ),
+
+    "GRU Config 2": (
+        gru_2,
+        gru_f1_callback_2
+    ),
+
+    "GRU Config 3": (
+        gru_3,
+        gru_f1_callback_3
+    )
+}
+
+(
+    best_gru_model,
+    best_gru_config,
+    best_gru_val_f1,
+    gru_tuning_df
+) = select_best_rnn_model(
+    "GRU",
+    gru_models
+)
+
+gru_final_result = evaluate_neural_model(
+    best_gru_model,
+    X_test_pad,
+    y_test,
+    f"GRU ({best_gru_config})"
+)
+
+lstm_models = {
+
+    "LSTM Config 1": (
+        lstm_1,
+        lstm_f1_callback_1
+    ),
+
+    "LSTM Config 2": (
+        lstm_2,
+        lstm_f1_callback_2
+    ),
+
+    "LSTM Config 3": (
+        lstm_3,
+        lstm_f1_callback_3
+    )
+}
+
+(
+    best_lstm_model,
+    best_lstm_config,
+    best_lstm_val_f1,
+    lstm_tuning_df
+) = select_best_rnn_model(
+    "LSTM",
+    lstm_models
+)
+
+lstm_final_result = evaluate_neural_model(
+    best_lstm_model,
+    X_test_pad,
+    y_test,
+    f"LSTM ({best_lstm_config})"
+)
+
+birnn_models = {
+
+    "BiRNN Config 1": (
+        birnn_1,
+        birnn_f1_callback_1
+    ),
+
+    "BiRNN Config 2": (
+        birnn_2,
+        birnn_f1_callback_2
+    ),
+
+    "BiRNN Config 3": (
+        birnn_3,
+        birnn_f1_callback_3
+    )
+}
+
+(
+    best_birnn_model,
+    best_birnn_config,
+    best_birnn_val_f1,
+    birnn_tuning_df
+) = select_best_rnn_model(
+    "Bidirectional SimpleRNN",
+    birnn_models
+)
+
+birnn_final_result = evaluate_neural_model(
+    best_birnn_model,
+    X_test_pad,
+    y_test,
+    f"Bidirectional SimpleRNN ({best_birnn_config})"
+)
